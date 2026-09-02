@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>科应管理后台（Mock）</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #1f2937; }
+    body { max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+    [hidden] { display: none !important; }
+    h1 { font-size: 1.5rem; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { border: 1px solid #d1d5db; padding: 0.5rem 0.75rem; text-align: left; }
+    th { background: #f3f4f6; }
+    form#loginForm { display: grid; gap: 0.75rem; max-width: 20rem; }
+    label { display: grid; gap: 0.25rem; font-size: 0.9rem; }
+    input { padding: 0.4rem 0.5rem; }
+    button { padding: 0.4rem 0.9rem; cursor: pointer; }
+    dialog { border: 1px solid #d1d5db; border-radius: 6px; padding: 1rem; width: 20rem; }
+    #toast { margin-top: 1rem; padding: 0.5rem 0.75rem; border: 1px solid; border-radius: 6px; }
+    #toast.success { color: #16a34a; border-color: #16a34a; }
+    #toast.error { color: #e7000b; border-color: #e7000b; }
+  </style>
+</head>
+<body>
+  <!-- 登录视图 -->
+  <section id="loginView">
+    <h1>科应管理后台</h1>
+    <form id="loginForm">
+      <label>用户名<input name="username" autocomplete="username" /></label>
+      <label>密码<input name="password" type="password" autocomplete="current-password" /></label>
+      <button type="submit">登录</button>
+      <p id="loginError" role="alert" class="error" hidden></p>
+    </form>
+    <p>Mock 管理员账号：admin / admin123</p>
+  </section>
+
+  <!-- 账号管理视图 -->
+  <section id="adminView" hidden>
+    <h1>账号管理</h1>
+    <table>
+      <thead>
+        <tr><th scope="col">账号</th><th scope="col">状态</th><th scope="col">操作</th></tr>
+      </thead>
+      <tbody>
+        <tr data-account="KY-01"><td>KY-01</td><td>正常</td><td><button type="button" data-reset="KY-01">重置密码</button></td></tr>
+        <tr data-account="KY-02"><td>KY-02</td><td>正常</td><td><button type="button" data-reset="KY-02">重置密码</button></td></tr>
+        <tr data-account="KY-03"><td>KY-03</td><td>正常</td><td><button type="button" data-reset="KY-03">重置密码</button></td></tr>
+        <tr data-account="KY-04"><td>KY-04</td><td>锁定</td><td><button type="button" data-reset="KY-04">重置密码</button></td></tr>
+        <tr data-account="KY-05"><td>KY-05</td><td>正常</td><td><button type="button" data-reset="KY-05">重置密码</button></td></tr>
+      </tbody>
+    </table>
+
+    <button type="button" id="logoutBtn">退出登录</button>
+
+    <!-- 改密结果 toast（页面级，独立于对话框，PRD §31 校验对象） -->
+    <p id="toast" role="status" hidden></p>
+
+    <!-- 重置密码对话框 -->
+    <dialog id="resetDialog">
+      <form method="dialog">
+        <h2>重置密码</h2>
+        <p>正在为账号 <strong id="dialogAccount"></strong> 设置新密码</p>
+        <label>新密码<input name="newPassword" autocomplete="new-password" /></label>
+        <button type="button" id="saveBtn">保存</button>
+        <button type="button" id="confirmBtn" hidden>确定</button>
+      </form>
+    </dialog>
+  </section>
+
+  <script>
+    (function () {
+      var SESSION_KEY = 'mock_admin_session';
+      var MOCK_ADMIN = { username: 'admin', password: 'admin123' };
+      // KY-04 模拟“改密失败”（例如账号被锁定），用于验证失败路径（PRD §47/§48）。
+      var FAIL_ACCOUNT = 'KY-04';
+      var currentAccount = null;
+
+      var loginView = document.getElementById('loginView');
+      var adminView = document.getElementById('adminView');
+      var loginForm = document.getElementById('loginForm');
+      var loginError = document.getElementById('loginError');
+      var resetDialog = document.getElementById('resetDialog');
+      var dialogAccount = document.getElementById('dialogAccount');
+      var newPasswordInput = document.querySelector('[name="newPassword"]');
+      var toast = document.getElementById('toast');
+      var saveBtn = document.getElementById('saveBtn');
+      var confirmBtn = document.getElementById('confirmBtn');
+
+      function showAdmin() { loginView.hidden = true; adminView.hidden = false; }
+      function showLogin() { adminView.hidden = true; loginView.hidden = false; }
+
+      if (localStorage.getItem(SESSION_KEY) === '1') showAdmin(); else showLogin();
+
+      loginForm.addEventListener('submit', function (ev) {
+        ev.preventDefault();
+        var u = loginForm.elements.username.value;
+        var p = loginForm.elements.password.value;
+        if (u === MOCK_ADMIN.username && p === MOCK_ADMIN.password) {
+          localStorage.setItem(SESSION_KEY, '1');
+          loginError.hidden = true;
+          showAdmin();
+        } else {
+          loginError.textContent = '用户名或密码错误';
+          loginError.hidden = false;
+        }
+      });
+
+      document.getElementById('logoutBtn').addEventListener('click', function () {
+        localStorage.removeItem(SESSION_KEY);
+        resetDialog.close();
+        toast.hidden = true;
+        showLogin();
+      });
+
+      Array.prototype.forEach.call(document.querySelectorAll('[data-reset]'), function (btn) {
+        btn.addEventListener('click', function () {
+          currentAccount = btn.getAttribute('data-reset');
+          dialogAccount.textContent = currentAccount;
+          newPasswordInput.value = '';
+          toast.hidden = true;
+          saveBtn.hidden = false;
+          confirmBtn.hidden = true;
+          resetDialog.showModal();
+        });
+      });
+
+      // 保存：记录新密码并展示“确定”确认按钮（PRD §31：点“确定”≠成功）。
+      saveBtn.addEventListener('click', function () {
+        confirmBtn.hidden = false;
+      });
+
+      // 确定：真正提交改密，并在页面级 toast 上给出结果（PRD §31 校验“修改成功”）。
+      confirmBtn.addEventListener('click', function () {
+        resetDialog.close();
+        if (currentAccount === FAIL_ACCOUNT) {
+          toast.textContent = '修改失败：该账号已被锁定';
+          toast.className = 'error';
+        } else {
+          toast.textContent = '修改成功';
+          toast.className = 'success';
+        }
+        toast.hidden = false;
+      });
+    })();
+  </script>
+</body>
+</html>

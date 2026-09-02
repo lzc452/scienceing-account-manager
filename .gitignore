@@ -1,0 +1,44 @@
+# dependencies
+node_modules/
+
+# pnpm local store / cache / state
+.pnpm-store/
+.pnpm-cache/
+.pnpm-state/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# 扩展 ZIP 打包产物
+*.zip
+
+# environment / secrets（PRD §42 管理员凭据只走环境变量）
+.env
+.env.local
+.env.*.local
+
+# Playwright 管理员认证状态（最高敏感，PRD §29）
+playwright/.auth/
+
+# SQLite 数据库（PRD §55）
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+# logs
+logs/
+*.log
+
+# OS / editor 杂项
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+
+# 工作区辅助目录（AI 助手记忆 / 代码图谱缓存，不入库）
+.workbuddy/
+.codegraph/
+.agent-teams/
+.ai-memory/

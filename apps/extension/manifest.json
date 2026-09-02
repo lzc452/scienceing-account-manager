@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "科应共享账号助手",
+  "version": "1.0.0",
+  "description": "科应共享账号管理平台浏览器扩展：看板握手 / 版本检测 / Lease 绑定 / 多 Tab 继承 / Activity 监听 / Shadow DOM 悬浮窗（最小权限）。",
+  "minimum_chrome_version": "102",
+  "permissions": ["tabs", "storage"],
+  "host_permissions": [
+    "http://localhost:3000/*",
+    "http://127.0.0.1:3000/*",
+    "http://localhost:5173/*",
+    "http://127.0.0.1:5173/*",
+    "https://www.scienceing.com/*",
+    "https://scienceing.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://localhost:5173/*", "http://127.0.0.1:5173/*"],
+      "js": ["src/content/dashboard.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://www.scienceing.com/*", "https://scienceing.com/*"],
+      "js": ["src/content/scienceing/scienceing.js", "src/panel/panel.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_title": "科应共享账号助手"
+  }
+}

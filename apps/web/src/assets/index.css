@@ -1,0 +1,269 @@
+@import "tailwindcss";
+
+/*
+ * 科应共享账号管理平台 — 设计令牌（Tailwind v4）
+ *
+ * 色值来源：仓库根 theme.css（禁止修改色值）。
+ * 彩色边界：语义色（status-*）仅用于状态圆点 / 状态徽章（PRODUCT-DESIGN §4.1），
+ *          按钮、卡片、导航、正文保持无彩色。
+ */
+@theme {
+  /* ===== 无彩色令牌 ===== */
+  --color-canvas: #f5f5f5;
+  --color-paper: #ffffff;
+  --color-surface-alt: #fafafa;
+  --color-ink: #0a0a0a;
+  --color-ink-soft: #171717;
+  --color-mid-gray: #737373;
+  --color-hairline: #e5e5e5;
+  --color-ember: #e7000b;
+
+  /* ===== 状态语义色（v1.1，仅状态标签） ===== */
+  --color-status-available: #16a34a;
+  --color-status-available-soft: #f0fdf4;
+  --color-status-in-use: #2563eb;
+  --color-status-in-use-soft: #eff6ff;
+  --color-status-recycling: #d97706;
+  --color-status-recycling-soft: #fffbeb;
+  --color-status-error: #e7000b;
+  --color-status-error-soft: #fdecec;
+
+  /* ===== shadcn/ui 主题映射（PRODUCT-DESIGN §2.2） ===== */
+  --color-background: #f5f5f5;
+  --color-foreground: #0a0a0a;
+  --color-card: #ffffff;
+  --color-card-foreground: #0a0a0a;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #0a0a0a;
+  --color-primary: #0a0a0a;
+  --color-primary-foreground: #fafafa;
+  --color-secondary: #f5f5f5;
+  --color-secondary-foreground: #0a0a0a;
+  --color-muted: #f5f5f5;
+  --color-muted-foreground: #737373;
+  --color-accent: #fafafa;
+  --color-accent-foreground: #171717;
+  --color-destructive: #e7000b;
+  --color-destructive-foreground: #ffffff;
+  --color-border: #e5e5e5;
+  --color-input: #f5f5f5;
+  --color-ring: #e5e5e5;
+
+  /* ===== 字体（§2.3：Geist 不含中文，回退系统 CJK） ===== */
+  --font-sans: 'Geist Sans', 'Geist', 'Noto Sans SC', 'PingFang SC',
+    'Microsoft YaHei', ui-sans-serif, system-ui, sans-serif;
+
+  /* ===== 圆角（18px 交互 / 24px 容器，无第三种） ===== */
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+  --radius-3xl: 24px;
+
+  /* ===== 阴影 ===== */
+  --shadow-subtle: oklab(0.145 -0.00000143796 0.00000340492 / 0.05) 0px 0px 0px
+      1px,
+    rgba(0, 0, 0, 0.1) 0px 1px 3px 0px, rgba(0, 0, 0, 0.1) 0px 1px 2px -1px;
+
+  /* 二级抬升：卡片内浮层（下拉菜单、吸顶表头、移动端抽屉）比卡片更高一层 */
+  --shadow-raised: 0 0 0 1px rgba(23, 23, 23, 0.06),
+    0 4px 12px -2px rgba(0, 0, 0, 0.06), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
+
+  /* 三级抬升：模态弹窗 / 抽屉盖在遮罩层之上 */
+  --shadow-overlay: 0 0 0 1px rgba(23, 23, 23, 0.06),
+    0 12px 32px -8px rgba(0, 0, 0, 0.12), 0 4px 8px -4px rgba(0, 0, 0, 0.06);
+}
+
+/*
+ * ==========================================================================
+ * 布局与层次令牌 —— 响应式 / 大屏排版 / 灰阶分区
+ *
+ * 设计意图：
+ *
+ * 1) 统一页面背景：canvas(#f5f5f5) 是唯一的「页面级」背景；paper(#ffffff) 只
+ *    作为被容器承载的内容面（卡片 / 弹层 / 表格体）。白与灰之间永远隔着一条
+ *    1px hairline + 阴影，不再出现大面积白块与灰块直接拼接。
+ *
+ * 2) 三级灰阶递进，每级之间必须有明确边界：
+ *      canvas #f5f5f5（页面底）
+ *        └ surface-alt #fafafa（侧边栏 / 卡片内分区）+ hairline 描边
+ *            └ paper #ffffff（卡片主体）+ hairline + shadow-subtle
+ *
+ * 3) 大屏克制：内容区设最大宽度并水平居中；垂直方向使用统一留白节奏
+ *    （--layout-rhythm），内容稀少时整体垂直居中，不被拉伸、不留失衡空白。
+ * ==========================================================================
+ */
+:root {
+  /* 内容区最大宽度：默认 1280（沿用原设计），窄栏用于表单 / 详情等稀疏页 */
+  --layout-page-max: 1280px;
+  --layout-narrow-max: 768px;
+
+  /* 水平安全边距：移动端 16px 起步，随视口平滑增长到 32px 封顶。
+     既避免小屏内容贴边，也避免大屏边距失控 */
+  --layout-gutter: clamp(1rem, 4vw, 2rem);
+
+  /* 统一垂直留白节奏：区块之间的呼吸感 24px → 40px */
+  --layout-rhythm: clamp(1.5rem, 3vw, 2.5rem);
+}
+
+@layer components {
+  /*
+   * 主内容容器 —— 页面的视觉主体。
+   * 大屏限制最大宽度并水平居中，避免内容被拉伸、间距失衡；
+   * min-width:0 是消除 flex/grid 子项横向溢出的根因手段。
+   */
+  .page-container {
+    width: 100%;
+    max-width: var(--layout-page-max);
+    margin-inline: auto;
+    padding-inline: var(--layout-gutter);
+    min-width: 0;
+  }
+
+  /* 窄内容栏：表单 / 详情 / 空态等「内容量少」的页面进一步收窄，保持克制 */
+  .page-container-narrow {
+    max-width: var(--layout-narrow-max);
+  }
+
+  /*
+   * 内容承载区（<main>）：占据顶栏之外的全部剩余高度。
+   * 直接子项用 margin-block:auto 实现「内容少时垂直居中」——相较于
+   * justify-content:center，它不会在内容超高时裁掉顶部。
+   */
+  .app-main {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-width: 0;
+    padding-block: var(--layout-rhythm);
+  }
+
+  .app-main > * {
+    margin-block: auto;
+  }
+
+  /*
+   * 表格横向滚动容器：把溢出严格限制在卡片内部，
+   * 保证页面本身在任何断点都不会出现横向滚动条。
+   */
+  .table-scroll {
+    width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /*
+   * 卡片内分区（表头带 / 页脚带 / 信息组）。
+   * 用 surface-alt(#fafafa) + 上下 hairline 做色阶递进，
+   * 而不是再引入一块新的大面积色块。
+   */
+  .surface-band {
+    background-color: var(--color-surface-alt);
+    border-top: 1px solid var(--color-hairline);
+    border-bottom: 1px solid var(--color-hairline);
+  }
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  /* 用 min-height 而非 height：内容超高时 #app 可自然增高，
+     避免 100% 定高导致的粘性头部与滚动异常 */
+  html,
+  body,
+  #app {
+    min-height: 100%;
+  }
+
+  html {
+    /* 长内容换行兜底，防止超长 token / URL 撑破容器产生横向溢出 */
+    overflow-wrap: break-word;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.43;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: 'ss01' on, 'cv11' on;
+  }
+
+  /* 媒体元素不得超出容器（横向溢出的常见来源） */
+  img,
+  svg,
+  video,
+  canvas {
+    max-width: 100%;
+  }
+
+  /* 中文标题不套用紧排（§2.3）；仅拉丁数字保持设计紧排由组件显式控制 */
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+  }
+}
+
+/* ===== 回收中圆点：¾ 弧 2s 匀速旋转（§4.1 / §9.3） ===== */
+@keyframes status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.status-dot-spin {
+  animation: status-spin 2s linear infinite;
+}
+
+@keyframes skeleton-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-skeleton {
+  animation: skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 150ms ease-out;
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-dialog-in {
+  animation: dialog-in 120ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot-spin,
+  .animate-skeleton,
+  .animate-fade-in-up,
+  .animate-dialog-in {
+    animation: none;
+  }
+}

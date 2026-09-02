@@ -1,0 +1,251 @@
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomBytes } from 'node:crypto';
+import { DatabaseService } from '../../db/database.service';
+import { AuditService } from '../../db/audit.service';
+import { ACCOUNT_STATUS, AUDIT_ACTION, AUDIT_RESULT, LEASE_STATUS, RELEASE_REASON } from '../../db/constants';
+import { encryptSecret, serializePayload } from '../../crypto/secret-box';
+import { loadMasterKey } from '../../crypto/master-key';
+import { nowIso } from '../../db/config';
+import type { AccountRow } from '../leases/leases.types';
+import type { AuthUser } from '../auth/auth.types';
+
+export interface AdminAccountView {
+  id: number;
+  code: string;
+  username: string;
+  status: string;
+  currentUser: string | null;
+  lastPasswordChangedAt: string | null;
+  enabled: boolean;
+  createdAt: string;
+}
+
+export interface AdminLeaseView {
+  id: number;
+  userDisplayName: string | null;
+  accountCode: string;
+  status: string;
+  startedAt: string;
+  lastActivityAt: string;
+  releasedAt: string | null;
+  releaseReason: string | null;
+}
+
+interface AccountListRow {
+  id: number;
+  code: string;
+  username: string;
+  status: string;
+  last_password_changed_at: string | null;
+  enabled: number;
+  created_at: string;
+  current_user: string | null;
+}
+
+interface LeaseListRow {
+  id: number;
+  status: string;
+  started_at: string;
+  last_activity_at: string;
+  released_at: string | null;
+  release_reason: string | null;
+  user_display: string | null;
+  account_code: string;
+}
+
+@Injectable()
+export class AdminService {
+  constructor(
+    private readonly dbService: DatabaseService,
+    private readonly audit: AuditService,
+  ) {}
+
+  listAccounts(): AdminAccountView[] {
+    const rows = this.dbService.db
+      .prepare(
+        `SELECT a.id, a.code, a.username, a.status, a.last_password_changed_at, a.enabled, a.created_at,
+                u.display_name AS current_user
+         FROM scienceing_accounts a
+         LEFT JOIN leases l ON l.account_id = a.id AND l.status = ?
+         LEFT JOIN users u ON u.id = l.user_id
+         ORDER BY a.code`,
+      )
+      .all(LEASE_STATUS.ACTIVE) as unknown as AccountListRow[];
+
+    return rows.map((row) => ({
+      id: row.id,
+      code: row.code,
+      username: row.username,
+      status: row.status,
+      currentUser: row.current_user,
+      lastPasswordChangedAt: row.last_password_changed_at,
+      enabled: row.enabled === 1,
+      createdAt: row.created_at,
+    }));
+  }
+
+  listLeases(): AdminLeaseView[] {
+    const rows = this.dbService.db
+      .prepare(
+        `SELECT l.id, l.status, l.started_at, l.last_activity_at, l.released_at, l.release_reason,
+                u.display_name AS user_display, a.code AS account_code
+         FROM leases l
+         JOIN users u ON u.id = l.user_id
+         JOIN scienceing_accounts a ON a.id = l.account_id
+         ORDER BY l.id DESC`,
+      )
+      .all() as unknown as LeaseListRow[];
+
+    return rows.map((row) => ({
+      id: row.id,
+      userDisplayName: row.user_display,
+      accountCode: row.account_code,
+      status: row.status,
+      startedAt: row.started_at,
+      lastActivityAt: row.last_activity_at,
+      releasedAt: row.released_at,
+      releaseReason: row.release_reason,
+    }));
+  }
+
+  /** 强制回收（幂等）：有 ACTIVE lease 才回收；否则返回当前状态（PRD §52）。 */
+  forceRelease(accountId: number, adminUser: AuthUser): { accountId: number; status: string; recycled: boolean } {
+    const account = this.getAccount(accountId);
+    const lease = this.dbService.db
+      .prepare('SELECT id FROM leases WHERE account_id = ? AND status = ?')
+      .get(accountId, LEASE_STATUS.ACTIVE) as unknown as { id: number } | undefined;
+    if (!lease) {
+      return { accountId, status: account.status, recycled: false };
+    }
+    this.enqueueReset(account, adminUser, AUDIT_ACTION.ADMIN_FORCE_RELEASE);
+    return { accountId, status: ACCOUNT_STATUS.RECYCLING, recycled: true };
+  }
+
+  /** 手动重置密码（两阶段 Phase 1）：生成 pending 密码 → RECYCLING + reset_job（PRD §30）。 */
+  resetPassword(accountId: number, adminUser: AuthUser): { accountId: number; status: string } {
+    const account = this.getAccount(accountId);
+    if (account.status === ACCOUNT_STATUS.RECYCLING) {
+      throw new ConflictException('账号正在回收中');
+    }
+    this.enqueueReset(account, adminUser, AUDIT_ACTION.RESET_PASSWORD);
+    return { accountId, status: ACCOUNT_STATUS.RECYCLING };
+  }
+
+  /** ERROR → AVAILABLE（管理员确认人工处理完成，PRD §23/§47）。 */
+  markAvailable(accountId: number, adminUser: AuthUser): { accountId: number; status: string } {
+    const account = this.getAccount(accountId);
+    if (account.status !== ACCOUNT_STATUS.ERROR) {
+      throw new ConflictException('仅 ERROR 账号可标记为可用');
+    }
+    this.dbService.db
+      .prepare('UPDATE scienceing_accounts SET status = ?, pending_password_ciphertext = NULL, updated_at = ? WHERE id = ?')
+      .run(ACCOUNT_STATUS.AVAILABLE, nowIso(), accountId);
+    this.audit.record({
+      action: AUDIT_ACTION.ADMIN_MANUAL_FIX,
+      result: AUDIT_RESULT.SUCCESS,
+      userId: adminUser.id,
+      accountId,
+      metadata: { accountCode: account.code },
+    });
+    return { accountId, status: ACCOUNT_STATUS.AVAILABLE };
+  }
+
+  /** 禁用账号：enabled=0；若有活动租约则一并回收（PRD §37）。 */
+  disable(accountId: number, adminUser: AuthUser): { accountId: number; enabled: boolean } {
+    const account = this.getAccount(accountId);
+    this.dbService.db.prepare('UPDATE scienceing_accounts SET enabled = 0, updated_at = ? WHERE id = ?').run(nowIso(), accountId);
+
+    const lease = this.dbService.db
+      .prepare('SELECT id FROM leases WHERE account_id = ? AND status = ?')
+      .get(accountId, LEASE_STATUS.ACTIVE) as unknown as { id: number } | undefined;
+    if (lease) {
+      this.enqueueReset(account, adminUser, AUDIT_ACTION.ADMIN_FORCE_RELEASE);
+    }
+
+    this.audit.record({
+      action: AUDIT_ACTION.ACCOUNT_DISABLE,
+      result: AUDIT_RESULT.SUCCESS,
+      userId: adminUser.id,
+      accountId,
+      metadata: { accountCode: account.code },
+    });
+    return { accountId, enabled: false };
+  }
+
+  /** 启用账号：enabled=1（PRD §37 对称操作）。 */
+  enable(accountId: number, adminUser: AuthUser): { accountId: number; enabled: boolean } {
+    const account = this.getAccount(accountId);
+    this.dbService.db.prepare('UPDATE scienceing_accounts SET enabled = 1, updated_at = ? WHERE id = ?').run(nowIso(), accountId);
+    this.audit.record({
+      action: AUDIT_ACTION.ACCOUNT_ENABLE,
+      result: AUDIT_RESULT.SUCCESS,
+      userId: adminUser.id,
+      accountId,
+      metadata: { accountCode: account.code },
+    });
+    return { accountId, enabled: true };
+  }
+
+  private getAccount(accountId: number): AccountRow {
+    const account = this.dbService.db
+      .prepare('SELECT * FROM scienceing_accounts WHERE id = ?')
+      .get(accountId) as unknown as AccountRow | undefined;
+    if (!account) {
+      throw new NotFoundException('账号不存在');
+    }
+    return account;
+  }
+
+  /** 生成 pending 密码（AES 加密）→ account RECYCLING → 回收活动租约 → 创建 reset_job。 */
+  private enqueueReset(account: AccountRow, adminUser: AuthUser, auditAction: string): void {
+    const db = this.dbService.db;
+    const newPassword = randomBytes(16).toString('base64url');
+    const pendingCiphertext = serializePayload(encryptSecret(newPassword, loadMasterKey()));
+    const now = nowIso();
+    let leaseId: number | null = null;
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('UPDATE scienceing_accounts SET pending_password_ciphertext = ?, status = ?, updated_at = ? WHERE id = ?').run(
+        pendingCiphertext,
+        ACCOUNT_STATUS.RECYCLING,
+        now,
+        account.id,
+      );
+
+      const lease = db
+        .prepare('SELECT id FROM leases WHERE account_id = ? AND status = ?')
+        .get(account.id, LEASE_STATUS.ACTIVE) as unknown as { id: number } | undefined;
+      if (lease) {
+        db.prepare(
+          'UPDATE leases SET status = ?, release_reason = ?, release_requested_at = ?, updated_at = ? WHERE id = ? AND status = ?',
+        ).run(LEASE_STATUS.RECYCLING, RELEASE_REASON.ADMIN_FORCE, now, now, lease.id, LEASE_STATUS.ACTIVE);
+        leaseId = lease.id;
+      }
+
+      db.prepare("INSERT INTO reset_jobs (account_id, lease_id, status, attempt_count, created_at) VALUES (?, ?, 'PENDING', 0, ?)").run(
+        account.id,
+        leaseId,
+        now,
+      );
+
+      db.exec('COMMIT');
+    } catch (err) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        /* 已回滚 */
+      }
+      throw err;
+    }
+
+    this.audit.record({
+      action: auditAction,
+      result: AUDIT_RESULT.SUCCESS,
+      userId: adminUser.id,
+      accountId: account.id,
+      leaseId,
+      metadata: { accountCode: account.code },
+    });
+  }
+}

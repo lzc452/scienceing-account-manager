@@ -1,0 +1,28 @@
+{
+  "name": "@scienceing/server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "科应共享账号管理平台 — NestJS 后端（认证/账号池/租约/Activity/回收队列/审计）",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "db:migrate": "node dist/db/migrate.js",
+    "db:seed": "node dist/db/seed.js",
+    "test": "node --test --test-isolation=none dist/crypto/crypto.test.js",
+    "test:e2e": "node --test --test-isolation=none dist/e2e/auth.e2e.js dist/e2e/leases.e2e.js dist/e2e/admin.e2e.js dist/e2e/reset.e2e.js"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "bcryptjs": "^3.0.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.13.0",
+    "@types/supertest": "^6.0.2",
+    "supertest": "^7.0.0"
+  }
+}

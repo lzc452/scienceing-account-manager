@@ -1,0 +1,13 @@
+{
+  "name": "@scienceing/extension",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "科应共享账号助手 — Chrome/Edge Manifest V3 浏览器扩展（握手/绑定/Activity 监听/Shadow DOM 悬浮窗）",
+  "scripts": {
+    "build": "node scripts/validate.mjs",
+    "validate": "node scripts/validate.mjs",
+    "test": "node test/version.test.mjs",
+    "check": "node scripts/validate.mjs && node test/version.test.mjs"
+  }
+}

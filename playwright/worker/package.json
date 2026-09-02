@@ -1,0 +1,19 @@
+{
+  "name": "@scienceing/playwright-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "科应管理员改密 Worker（Playwright，单 Worker 串行，两阶段改密 Phase 2）",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "login": "node dist/cli.js login",
+    "reset": "node dist/cli.js reset",
+    "run-queue": "node dist/cli.js run",
+    "test": "node --test --test-isolation=none dist/tests/*.test.js"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0"
+  }
+}
