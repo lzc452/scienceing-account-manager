@@ -7,6 +7,13 @@
     "node": ">=20.0.0"
   },
   "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:server": "node scripts/dev.mjs --only=server",
+    "dev:web": "node scripts/dev.mjs --only=web",
+    "dev:reset": "node scripts/dev.mjs --reset",
+    "dev:rebuild": "node scripts/dev.mjs --rebuild",
+    "db:migrate": "pnpm --filter @scienceing/server db:migrate",
+    "db:seed": "pnpm --filter @scienceing/server db:seed",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "build:shared": "pnpm --filter @scienceing/shared build"
