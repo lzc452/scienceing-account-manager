@@ -41,9 +41,14 @@ export function workerCliPath(): string {
   return raw ? path.resolve(repoRoot, raw) : path.join(repoRoot, 'playwright', 'worker', 'dist', 'cli.js');
 }
 
-/** 单次浏览器操作超时（毫秒，默认 120s：登录 + 改密 + 成功文案校验）。 */
+/**
+ * 单次 Worker CLI 超时（毫秒，默认 180s）。
+ * 覆盖最坏路径：storageState 失效自动重登（单点确认 ~10s + 跳转 + 二次导航）+
+ * Worker 内部最多 3 次尝试（每次 15~40s）+ 失败重试间隔。120s 对「重登 + 多次重试」偏紧，
+ * 会导致改密其实成功但 CLI 未退出被误判失败；可用 SCIENCING_WORKER_TIMEOUT_MS 覆盖。
+ */
 export function workerTimeoutMs(): number {
-  return envInt('SCIENCING_WORKER_TIMEOUT_MS', 120_000);
+  return envInt('SCIENCING_WORKER_TIMEOUT_MS', 180_000);
 }
 
 /**

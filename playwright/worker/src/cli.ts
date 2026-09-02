@@ -61,9 +61,8 @@ async function cmdLogin(): Promise<void> {
     log('storageState 已保存');
     printJson({ ok: true, storageStatePath: config.storageStatePath });
   } finally {
-    log('正在关闭浏览器');
-    await browser.close().catch(() => undefined);
-    log('浏览器已关闭');
+    log('关闭浏览器（限时 3s，不阻塞进程退出）');
+    await boundedClose(browser.close());
   }
 }
 
@@ -82,7 +81,8 @@ async function cmdReset(username: string | undefined, password: string | undefin
     printJson(result);
     return result.status === 'SUCCESS' ? 0 : 1;
   } finally {
-    await worker.close();
+    // 真实站点 Chrome 偶发无法优雅退出 → 限时后由 main 的 process.exit 兜底，避免被 executor 判超时
+    await boundedClose(worker.close());
   }
 }
 
@@ -100,7 +100,7 @@ async function cmdRun(jobsFile: string | undefined): Promise<number> {
     printJson(results);
     return results.every((r) => r.status === 'SUCCESS') ? 0 : 1;
   } finally {
-    await worker.close();
+    await boundedClose(worker.close());
   }
 }
 
@@ -119,8 +119,20 @@ async function cmdCheck(): Promise<number> {
     printJson({ ok, ...detail });
     return ok ? 0 : 1;
   } finally {
-    await browser.close().catch(() => undefined);
+    await boundedClose(browser.close());
   }
+}
+
+/**
+ * 限时关闭：真实科应 Chrome 偶发在 browser.close()/worker.close() 上挂起
+ * （子进程句柄不释放），导致 CLI 不退出、被 executor 120s 超时误判失败。
+ * 这里最多等 3s，随后由 main() 的 process.exit 强制退出（JSON 结果早已落盘/写 stdout）。
+ */
+function boundedClose(promise: Promise<unknown>, ms = 3000): Promise<void> {
+  return Promise.race([
+    promise.catch(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, ms)),
+  ]) as Promise<void>;
 }
 
 async function main(): Promise<number> {

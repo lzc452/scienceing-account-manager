@@ -68,7 +68,12 @@ async function applyRule(key) {
 async function onCheck() {
   checking.value = true
   try {
-    health.value = await runHealthCheck()
+    // 45s 兜底：防止后端/Worker 异常时请求挂起导致按钮永远“检测中…”
+    const result = await Promise.race([
+      runHealthCheck(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('检测超时（>45s），请重试')), 45_000)),
+    ])
+    health.value = result
   } catch (e) {
     toast({ title: e?.message || '检测失败', variant: 'destructive' })
   } finally {

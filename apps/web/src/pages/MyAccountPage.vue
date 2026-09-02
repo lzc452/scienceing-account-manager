@@ -126,6 +126,8 @@ async function onRelease() {
     lease.value = null
     account.value = null
     toast({ title: '已提交归还', description: '账号正在回收，密码重置后即可重新领取' })
+    // 重定向到首页
+    router.push('/')
   } catch (e) {
     toast({ title: e?.message || '归还失败', variant: 'destructive' })
   } finally {

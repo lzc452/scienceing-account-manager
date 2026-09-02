@@ -73,12 +73,13 @@ function formatDate(iso) {
 
 const dialogMeta = computed(() => {
   if (!dialog.value) return null
+  // 将重置 {{ resetTarget.code }}（{{ resetTarget.username }}）的密码并回收其活动租约。
   const { type, account } = dialog.value
   if (type === 'force-release') {
     return { title: `强制回收 ${account.code}`, description: '将重置密码并立即退出当前使用人的科应会话。', destructive: true, confirm: '确认回收' }
   }
   if (type === 'reset-password') {
-    return { title: '重置密码', description: '将重置所选科应账号的密码：立即踢出当前会话并回收，由系统生成新密码并在科应后台自动完成改密（静默，不发送通知）。', destructive: false, confirm: '确认重置' }
+    return { title: '重置密码', description: '', destructive: false, confirm: '确认重置' }
   }
   if (type === 'disable') {
     return { title: `禁用账号 ${account.code}`, description: '禁用后该账号不可再被领取；若有活动租约将一并回收。', destructive: true, confirm: '确认禁用' }
@@ -298,13 +299,9 @@ async function onFix(account) {
       :destructive="dialogMeta?.destructive"
       @update:open="dialog = null"
     >
-      <!-- 重置密码：根据账号选择对应账号进行重置（默认为点击行） -->
-      <div v-if="dialog?.type === 'reset-password'" class="flex flex-col gap-1.5">
-        <Label>选择要重置的科应账号</Label>
-        <Select v-model="resetTargetId" :options="accountOptions" />
-        <p v-if="resetTarget" class="text-xs text-mid-gray">
-          将重置 {{ resetTarget.code }}（{{ resetTarget.username }}）的密码并回收其活动租约。
-        </p>
+      <div v-if="dialog?.type === 'reset-password'" class="flex flex-col gap-2">
+        <p>此操作将重置所选 {{resetTarget.code}} 账号的密码；</p>
+        <p>科应账号 {{resetTarget.username}} 的会话将会回收，由系统生成新密码并在科应后台自动完成改密。</p>
       </div>
       <template #footer>
         <Button variant="outline" @click="dialog = null">取消</Button>

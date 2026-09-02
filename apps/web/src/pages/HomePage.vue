@@ -140,11 +140,6 @@ const cta = computed(() => {
   return { kind: 'claim', label: '我要使用科应' }
 })
 
-// 管理员点击卡片跳转账号管理页面
-function onCardClick(card) {
-  if (!isAdmin.value || !card.id) return
-  router.push(`/admin/accounts/${card.id}`)
-}
 
 async function onCta() {
   const c = cta.value
@@ -222,6 +217,18 @@ function openEdit(card) {
   editForm.value = { code: card.code, username: card.username }
   editOpen.value = true
 }
+
+// openAccount 判断是否是管理员，管理员 跳转 /admin/accounts
+// 注意：路由仅注册了 /admin/accounts（账号管理列表），没有 /admin/accounts/:id 详情页，
+// 跳 :id 会因无匹配路由而“点了没反应”。故跳转列表页；如需定位到具体账号可后续加 ?focus= 支持。
+function openAccount(card) {
+  if (isAdmin.value && card?.id != null) {
+    router.push('/admin/accounts')
+  } else {
+    return false
+  }
+}
+
 
 async function saveCreate() {
   if (!createForm.value.code.trim() || !createForm.value.username.trim()) return
@@ -423,10 +430,10 @@ async function confirmImport() {
               <div
                 v-for="card in pagedCards"
                 :key="card.id ?? card.code"
-                class="account-card flex flex-col rounded-2xl p-4 shadow-sm"
+                class="account-card flex flex-col rounded-2xl p-4 shadow-sm cursor-pointer"
                 :class="[!card.enabled ? 'opacity-60' : '', cardVisual(card).recycling ? 'is-recycling' : '']"
                 :style="cardStyle(card)"
-                @click="isAdmin ? () => onCardClick(card) : null"
+                @click="openAccount(card)"
               >
                 <div class="flex items-start justify-between gap-2">
                   <div class="w-100 flex min-w-0 items-start justify-between gap-2">
