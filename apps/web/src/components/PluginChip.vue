@@ -30,14 +30,14 @@ const meta = computed(() => {
   }
 })
 
-const downloadLabel = computed(() => (props.state === 'outdated' ? '下载最新版' : '下载插件'))
+// const downloadLabel = computed(() => (props.state === 'outdated' ? '下载最新版' : '下载插件'))
 </script>
 
 <template>
-  <div :class="cn('flex items-center gap-2', props.class)">
+  <div :class="cn('flex items-center gap-1', props.class)">
     <span class="size-2 shrink-0 rounded-full" :style="{ backgroundColor: meta.dot }" aria-hidden="true" />
     <span
-      class="inline-flex items-center gap-1 rounded-2xl border border-transparent px-2 py-0.5 text-xs font-medium"
+      class="inline-flex items-center gap-1 rounded-2xl px-2 text-xs font-medium"
       :style="{ backgroundColor: meta.bg, color: meta.text }"
     >
       {{ meta.label }}
@@ -49,7 +49,6 @@ const downloadLabel = computed(() => (props.state === 'outdated' ? '下载最新
       @click="emit('download')"
     >
       <Download class="size-3.5" />
-      {{ downloadLabel }}
     </button>
   </div>
 </template>

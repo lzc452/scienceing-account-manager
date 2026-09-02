@@ -118,6 +118,7 @@
     margin-inline: auto;
     padding-inline: var(--layout-gutter);
     min-width: 0;
+    background-color: var(--color-paper);
   }
 
   /* 窄内容栏：表单 / 详情 / 空态等「内容量少」的页面进一步收窄，保持克制 */
@@ -135,7 +136,7 @@
     flex: 1 1 auto;
     flex-direction: column;
     min-width: 0;
-    padding-block: var(--layout-rhythm);
+    /* padding-block: var(--layout-rhythm); */
   }
 
   .app-main > * {

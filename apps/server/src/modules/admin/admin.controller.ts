@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { AdminService, type AdminAccountView, type AdminLeaseView } from './admin.service';
 import { AuthGuard } from '../../guards/auth.guard';
 import { AdminGuard } from '../../guards/admin.guard';
@@ -13,6 +13,24 @@ export class AdminController {
   @Get('accounts')
   accounts(): AdminAccountView[] {
     return this.adminService.listAccounts();
+  }
+
+  /** 新增科应账号：POST /admin/accounts { code, username } */
+  @Post('accounts')
+  createAccount(@Body() dto: { code?: string; username?: string }, @CurrentUser() admin: AuthUser): AdminAccountView {
+    return this.adminService.createAccount(dto, admin);
+  }
+
+  /** CSV 批量导入：POST /admin/accounts/bulk { accounts: [{ code, username }] } */
+  @Post('accounts/bulk')
+  bulkCreateAccounts(@Body() dto: { accounts?: Array<{ code?: string; username?: string }> }, @CurrentUser() admin: AuthUser) {
+    return this.adminService.bulkCreateAccounts(dto.accounts ?? [], admin);
+  }
+
+  /** 删除科应账号：DELETE /admin/accounts/:id */
+  @Delete('accounts/:id')
+  deleteAccount(@Param('id', ParseIntPipe) id: number, @CurrentUser() admin: AuthUser) {
+    return this.adminService.deleteAccount(id, admin);
   }
 
   @Get('leases')

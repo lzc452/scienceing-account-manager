@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import AdminLayout from '@/layouts/AdminLayout.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -15,7 +15,7 @@ import TableHeader from '@/components/ui/TableHeader.vue'
 import TableRow from '@/components/ui/TableRow.vue'
 import { getAdminLogs } from '@/api/admin'
 
-const PAGE_SIZE = 20
+const PAGE_SIZE = 10
 
 const ACTION_OPTIONS = [
   { value: 'all', label: '全部' },
@@ -34,36 +34,61 @@ const ACTION_OPTIONS = [
 
 const USER_NAMES = { 1: 'admin', 2: '张三', 3: '李四', 4: '王五' }
 
-const loading = ref(true)
+const loading = ref(true) // 初次加载 / 筛选变更 → 骨架屏
+const pending = ref(false) // 翻页请求中 → 禁用按钮并保留当前行
 const error = ref('')
-const allLogs = ref([])
+const items = ref([]) // 当前页数据（来自后端）
+const total = ref(0) // 后端过滤后的总条数
 const actionFilter = ref('all')
 const showActivity = ref(false)
 const page = ref(1)
 
-const filteredLogs = computed(() => {
-  let rows = allLogs.value
-  if (!showActivity.value) rows = rows.filter((l) => l.action !== 'ACTIVITY')
-  if (actionFilter.value !== 'all') rows = rows.filter((l) => l.action === actionFilter.value)
-  return rows
-})
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
-const totalPages = computed(() => Math.max(1, Math.ceil(filteredLogs.value.length / PAGE_SIZE)))
-const pagedLogs = computed(() => filteredLogs.value.slice((page.value - 1) * PAGE_SIZE, page.value * PAGE_SIZE))
-
-async function load() {
+async function load(opts = {}) {
+  if (opts.silent) pending.value = true
+  else loading.value = true
   try {
-    const res = await getAdminLogs({ page: 1, pageSize: 200 })
-    allLogs.value = res.items || []
+    const res = await getAdminLogs({
+      page: page.value,
+      pageSize: PAGE_SIZE,
+      action: actionFilter.value !== 'all' ? actionFilter.value : undefined,
+      hideActivity: showActivity.value ? undefined : '1',
+    })
+    items.value = res.items || []
+    total.value = res.total ?? 0
     error.value = ''
   } catch (e) {
     error.value = e?.message || '加载失败'
+    items.value = []
+    total.value = 0
   } finally {
     loading.value = false
+    pending.value = false
+  }
+}
+
+function goPrev() {
+  if (page.value > 1) {
+    page.value -= 1
+    load({ silent: true })
+  }
+}
+
+function goNext() {
+  if (page.value < totalPages.value) {
+    page.value += 1
+    load({ silent: true })
   }
 }
 
 onMounted(load)
+
+// 筛选条件变化（动作 / 显示 Activity）→ 回到第 1 页，由后端重新分页+过滤
+watch([actionFilter, showActivity], () => {
+  page.value = 1
+  load()
+})
 
 function formatDate(iso) {
   const d = new Date(iso)
@@ -134,13 +159,13 @@ function resultMeta(result) {
                 </TableCell>
               </TableRow>
             </template>
-            <template v-else-if="pagedLogs.length === 0">
+            <template v-else-if="items.length === 0">
               <TableRow>
                 <TableCell colspan="5" class="py-6 text-center text-mid-gray">暂无日志</TableCell>
               </TableRow>
             </template>
             <template v-else>
-              <TableRow v-for="log in pagedLogs" :key="log.id">
+              <TableRow v-for="log in items" :key="log.id">
                 <TableCell class="tabular-nums text-mid-gray">{{ formatDate(log.createdAt) }}</TableCell>
                 <TableCell class="font-medium">{{ log.action }}</TableCell>
                 <TableCell>
@@ -158,11 +183,11 @@ function resultMeta(result) {
 
       <!-- 分页条：窄屏换行居中，避免「共 N 条」与翻页按钮挤成一行 -->
       <div class="flex flex-wrap items-center justify-between gap-3 text-xs text-mid-gray">
-        <span>共 {{ filteredLogs.length }} 条</span>
+        <span>共 {{ total }} 条</span>
         <div class="flex items-center gap-2">
-          <Button variant="outline" size="sm" :disabled="page <= 1" @click="page--">上一页</Button>
+          <Button variant="outline" size="sm" :disabled="page <= 1 || pending" @click="goPrev">上一页</Button>
           <span class="tabular-nums">{{ page }} / {{ totalPages }}</span>
-          <Button variant="outline" size="sm" :disabled="page >= totalPages" @click="page++">下一页</Button>
+          <Button variant="outline" size="sm" :disabled="page >= totalPages || pending" @click="goNext">下一页</Button>
         </div>
       </div>
     </div>

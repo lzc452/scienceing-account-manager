@@ -158,6 +158,56 @@ async function renameAccount(id, dto) {
   return { ...account }
 }
 
+async function createAccount(dto) {
+  await delay()
+  const code = (dto.code ?? '').trim()
+  const username = (dto.username ?? '').trim()
+  if (!code) throw httpError('账号编号不能为空', 400)
+  if (!username) throw httpError('科应账号不能为空', 400)
+  if (state.accounts.some((a) => a.code === code)) {
+    throw httpError(`账号编号「${code}」已存在`, 409)
+  }
+  if (state.accounts.some((a) => a.username === username)) {
+    throw httpError(`科应账号「${username}」已存在`, 409)
+  }
+  const account = {
+    id: Math.max(0, ...state.accounts.map((a) => a.id)) + 1,
+    code,
+    username,
+    status: 'AVAILABLE',
+    currentUser: null,
+    lastPasswordChangedAt: new Date().toISOString(),
+    enabled: true,
+    createdAt: new Date().toISOString(),
+  }
+  state.accounts.push(account)
+  return { ...account }
+}
+
+async function deleteAccount(id) {
+  await delay()
+  const account = accountOf(id)
+  const lease = state.leases.find((l) => l.accountCode === account.code && l.status === 'ACTIVE')
+  if (lease) throw httpError('账号使用中，请先强制回收再删除', 409)
+  state.accounts = state.accounts.filter((a) => a.id !== id)
+  return { accountId: id }
+}
+
+async function bulkCreateAccounts(accounts) {
+  await delay()
+  let created = 0
+  const failed = []
+  for (const dto of accounts) {
+    try {
+      await createAccount(dto)
+      created += 1
+    } catch (err) {
+      failed.push({ code: (dto.code ?? '').trim() || '(空)', reason: err.message })
+    }
+  }
+  return { created, failed }
+}
+
 async function listUsers() {
   await delay()
   return cloneUsers()
@@ -217,10 +267,11 @@ async function listLeases() {
   return state.leases.map((l) => ({ ...l }))
 }
 
-async function listLogs({ action, page = 1, pageSize = 20 } = {}) {
+async function listLogs({ action, hideActivity, page = 1, pageSize = 20 } = {}) {
   await delay()
   let rows = state.logs.map((l) => ({ ...l }))
   if (action) rows = rows.filter((l) => l.action === action)
+  if (hideActivity) rows = rows.filter((l) => l.action !== 'ACTIVITY')
   const total = rows.length
   const items = rows.slice((page - 1) * pageSize, page * pageSize)
   return { items, total, page, pageSize }
@@ -264,6 +315,9 @@ export const adminMockApi = {
   disable,
   enable,
   renameAccount,
+  createAccount,
+  deleteAccount,
+  bulkCreateAccounts,
   listUsers,
   createUser,
   bulkCreateUsers,

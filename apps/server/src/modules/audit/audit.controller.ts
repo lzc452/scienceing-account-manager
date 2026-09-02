@@ -22,11 +22,26 @@ export class AuditController {
   constructor(private readonly dbService: DatabaseService) {}
 
   @Get('logs')
-  list(@Query('action') action?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
+  list(
+    @Query('action') action?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('hideActivity') hideActivity?: string,
+  ) {
     const p = Math.max(1, Number(page) || 1);
     const ps = Math.min(100, Math.max(1, Number(pageSize) || 20));
-    const where = action ? 'WHERE action = ?' : '';
-    const params: string[] = action ? [action] : [];
+
+    // 服务端过滤：action 精确匹配；hideActivity=1 时排除 ACTIVITY 明细（与前端「显示 Activity 明细」开关对应）。
+    const conditions: string[] = [];
+    const params: string[] = [];
+    if (action) {
+      conditions.push('action = ?');
+      params.push(action);
+    }
+    if (hideActivity && hideActivity !== '0' && hideActivity !== 'false') {
+      conditions.push("action != 'ACTIVITY'");
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const total = this.dbService.db
       .prepare(`SELECT COUNT(*) AS c FROM audit_logs ${where}`)

@@ -126,3 +126,74 @@ export function parseUsersCsv(text) {
 export function usersCsvTemplate() {
   return ['用户名,姓名,部门,角色,密码', 'zhangsan,张三,研发部,USER,初始密码123', 'lisi,李四,产品部,USER,初始密码456'].join('\r\n')
 }
+
+// ---------------------------------------------------------------------------
+// 科应账号 CSV（新增 / 导入）：仅需 账号编号(code) + 科应账号(username)。
+// 密码由系统以占位密文托管，管理员后续经「重置密码」流程生成真实密码。
+// ---------------------------------------------------------------------------
+
+const ACCOUNT_HEADER_ALIASES = {
+  code: ['code', '账号编号', '编号', '账号码', '账号'],
+  username: ['username', '科应账号', '账号名', '登录名', '名称'],
+}
+
+function mapAccountHeader(cell) {
+  const key = String(cell ?? '').trim().toLowerCase()
+  for (const [field, aliases] of Object.entries(ACCOUNT_HEADER_ALIASES)) {
+    if (aliases.includes(key)) return field
+  }
+  return null
+}
+
+/**
+ * 解析科应账号 CSV 文本。
+ * 返回 { rows: [{ index, code, username, errors: [] }], headerErrors: [] }
+ * 必需列：code、username。批内 code 重复的行标记为不可导入。
+ */
+export function parseAccountsCsv(text) {
+  const lines = splitRows(text).filter((line, i, arr) => line.trim() !== '' || i < arr.length - 1)
+  if (lines.length === 0) return { rows: [], headerErrors: ['文件为空'] }
+
+  const headers = parseLine(lines[0]).map(mapAccountHeader)
+  const headerErrors = []
+  for (const required of ['code', 'username']) {
+    if (!headers.includes(required)) {
+      headerErrors.push(`缺少必需列：${ACCOUNT_HEADER_ALIASES[required][0]}`)
+    }
+  }
+
+  const rows = []
+  for (let i = 1; i < lines.length; i += 1) {
+    const cells = parseLine(lines[i])
+    const record = { code: '', username: '' }
+    headers.forEach((field, col) => {
+      if (field && cells[col] !== undefined) record[field] = cells[col]
+    })
+
+    const errors = []
+    if (headerErrors.length === 0) {
+      if (!record.code) errors.push('账号编号为空')
+      if (!record.username) errors.push('科应账号为空')
+    }
+
+    rows.push({ index: i, code: record.code, username: record.username, errors })
+  }
+
+  // 批内 code 重复：第二次及以后出现的行标记为不可导入
+  const seen = new Set()
+  for (const row of rows) {
+    if (!row.code) continue
+    if (seen.has(row.code)) {
+      row.errors.push('批内账号编号重复')
+    } else {
+      seen.add(row.code)
+    }
+  }
+
+  return { rows, headerErrors }
+}
+
+/** 生成账号导入示例 CSV（供「下载模板」使用）。 */
+export function accountsCsvTemplate() {
+  return ['账号编号,科应账号', 'KY-11,ky-11', 'KY-12,ky-12'].join('\r\n')
+}

@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { LogOut, Menu, X } from 'lucide-vue-next'
 import PluginChip from '@/components/PluginChip.vue'
+import Dialog from '@/components/ui/Dialog.vue'
+import Button from '@/components/ui/Button.vue'
 import { cn } from '@/lib/utils'
 import { detectExtension, pluginState } from '@/api'
 
@@ -30,6 +32,13 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['logout'])
+
+/** 退出登录二次确认弹窗 */
+const logoutOpen = ref(false)
+function confirmLogout() {
+  logoutOpen.value = false
+  emit('logout')
+}
 
 const route = useRoute()
 
@@ -68,7 +77,6 @@ watch(() => route.fullPath, () => {
 const sidebarHidden = computed(() => !isDesktop.value && !drawerOpen.value)
 
 const navItems = [
-  { label: '账号池看板', path: '/' },
   { label: '账号管理', path: '/admin/accounts' },
   { label: '用户管理', path: '/admin/users' },
   { label: '租约记录', path: '/admin/leases' },
@@ -117,15 +125,10 @@ function isActive(path) {
     >
       <div class="flex items-start justify-between px-5 pb-4 pt-6">
         <div class="min-w-0">
-          <div class="truncate text-base font-semibold leading-6 text-ink">科应共享</div>
-          <div class="mt-0.5 text-xs text-mid-gray">账号管理平台</div>
-          <!-- 助手检测组件：紧邻品牌区（管理员页面与公开页面同理） -->
-          <PluginChip
-            :state="pluginState.status"
-            :version="pluginState.version"
-            :min-version="pluginState.minimumVersion"
-            class="mt-2"
-          />
+          <div class="flex items-baseline gap-2.5">
+            <div class="truncate text-base font-semibold leading-6 text-ink">科应共享</div>
+            <div class="mt-0.5 text-xs text-mid-gray">账号管理平台</div>
+          </div>
         </div>
         <!-- 仅在抽屉态需要关闭按钮 -->
         <button
@@ -167,7 +170,15 @@ function isActive(path) {
       </nav>
 
       <div class="border-t border-hairline px-5 py-4 text-xs text-mid-gray">
-        {{ version }}
+        <div class="flex item-center justify-between gap-2.5">
+          {{ version }}
+          <!-- 助手检测组件：紧邻品牌区（管理员页面与公开页面同理） -->
+          <PluginChip
+            :state="pluginState.status"
+            :version="pluginState.version"
+            :min-version="pluginState.minimumVersion"
+          />
+        </div>
       </div>
     </aside>
 
@@ -198,14 +209,19 @@ function isActive(path) {
           <span class="text-ink">{{ currentLabel }}</span>
         </nav>
 
-        <div class="flex shrink-0 items-center gap-2 sm:gap-3">
+        <div class="flex shrink-0 items-center gap-2 sm:gap-3 cursor-pointer">
+          <RouterLink to="/" class="hidden sm:inline-flex">
+            <span class="hidden max-w-[10rem] truncate text-sm text-mid-gray sm:inline">
+              返回账号看板
+            </span>
+          </RouterLink>
           <span class="hidden max-w-[10rem] truncate text-sm text-mid-gray sm:inline">
             {{ adminName }}
           </span>
           <button
             type="button"
             class="inline-flex items-center gap-1.5 rounded-2xl px-2.5 py-1.5 text-sm font-medium text-mid-gray transition-colors hover:bg-surface-alt hover:text-ink"
-            @click="emit('logout')"
+            @click="logoutOpen = true"
           >
             <LogOut class="size-4" />
             <span class="hidden sm:inline">退出</span>
@@ -221,6 +237,18 @@ function isActive(path) {
         <slot />
       </main>
     </div>
+
+    <Dialog
+      :open="logoutOpen"
+      title="退出登录？"
+      description="退出后将返回登录页，需重新登录才能继续管理账号。"
+      @update:open="(v) => (logoutOpen = v)"
+    >
+      <template #footer>
+        <Button variant="outline" @click="logoutOpen = false">取消</Button>
+        <Button variant="default" @click="confirmLogout">确认退出</Button>
+      </template>
+    </Dialog>
   </div>
 </template>
 

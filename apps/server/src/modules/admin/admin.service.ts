@@ -7,6 +7,7 @@ import { AutomationService } from '../automation/automation.service';
 import { encryptSecret, serializePayload } from '../../crypto/secret-box';
 import { loadMasterKey } from '../../crypto/master-key';
 import { nowIso } from '../../db/config';
+import { SEED_PLACEHOLDER_PASSWORD } from '../../db/seed';
 import type { AccountRow } from '../leases/leases.types';
 import type { AuthUser } from '../auth/auth.types';
 
@@ -279,6 +280,140 @@ export class AdminService {
       throw new NotFoundException('账号不存在');
     }
     return account;
+  }
+
+  /** 单账号视图（含当前使用人，PRD §35）：复用于新增/删除后返回。 */
+  private accountView(id: number): AdminAccountView {
+    const row = this.dbService.db
+      .prepare(
+        `SELECT a.id, a.code, a.username, a.status, a.last_password_changed_at, a.enabled, a.created_at,
+                u.display_name AS current_user
+         FROM scienceing_accounts a
+         LEFT JOIN leases l ON l.account_id = a.id AND l.status = ?
+         LEFT JOIN users u ON u.id = l.user_id
+         WHERE a.id = ?`,
+      )
+      .get(LEASE_STATUS.ACTIVE, id) as unknown as AccountListRow;
+    return {
+      id: row.id,
+      code: row.code,
+      username: row.username,
+      status: row.status,
+      currentUser: row.current_user,
+      lastPasswordChangedAt: row.last_password_changed_at,
+      enabled: row.enabled === 1,
+      createdAt: row.created_at,
+    };
+  }
+
+  /**
+   * 新增科应账号（管理员手工录入）。
+   * 密码由系统以占位密文托管（与 seed 一致），默认 AVAILABLE / 启用，
+   * 真实可用密码经后续「重置密码」自动化流程生成。
+   */
+  createAccount(dto: { code?: string; username?: string }, adminUser: AuthUser): AdminAccountView {
+    const code = dto.code?.trim();
+    const username = dto.username?.trim();
+    if (!code) throw new BadRequestException('账号编号不能为空');
+    if (!username) throw new BadRequestException('科应账号不能为空');
+    if (!/^[A-Za-z0-9_-]+$/.test(code)) {
+      throw new BadRequestException('账号编号仅允许字母、数字、- 和 _');
+    }
+
+    const db = this.dbService.db;
+    if (db.prepare('SELECT id FROM scienceing_accounts WHERE code = ?').get(code)) {
+      throw new ConflictException(`账号编号「${code}」已存在`);
+    }
+    if (db.prepare('SELECT id FROM scienceing_accounts WHERE username = ?').get(username)) {
+      throw new ConflictException(`科应账号「${username}」已存在`);
+    }
+
+    const ciphertext = serializePayload(encryptSecret(SEED_PLACEHOLDER_PASSWORD, loadMasterKey()));
+    const now = nowIso();
+    const info = db
+      .prepare(
+        `INSERT INTO scienceing_accounts
+          (code, username, current_password_ciphertext, pending_password_ciphertext, status, last_password_changed_at, enabled, created_at, updated_at)
+         VALUES (?, ?, ?, NULL, ?, ?, 1, ?, ?)`,
+      )
+      .run(code, username, ciphertext, ACCOUNT_STATUS.AVAILABLE, now, now, now);
+    const id = Number(info.lastInsertRowid);
+
+    this.audit.record({
+      action: AUDIT_ACTION.ACCOUNT_CREATE,
+      result: AUDIT_RESULT.SUCCESS,
+      userId: adminUser.id,
+      accountId: id,
+      metadata: { accountCode: code, username },
+    });
+    return this.accountView(id);
+  }
+
+  /**
+   * 删除科应账号（PRD §37 管理动作，不可逆）。
+   * 有活动租约时禁止删除（应先回收）；否则级联删除其 leases / reset_jobs / audit_logs
+   * 后删除账号行（account_id 为 NOT NULL，无法置空保留，故整体清除）。
+   */
+  deleteAccount(accountId: number, adminUser: AuthUser): { accountId: number } {
+    const account = this.getAccount(accountId);
+    const db = this.dbService.db;
+
+    const activeLease = db
+      .prepare('SELECT id FROM leases WHERE account_id = ? AND status = ?')
+      .get(accountId, LEASE_STATUS.ACTIVE) as unknown as { id: number } | undefined;
+    if (activeLease) {
+      throw new ConflictException('账号使用中，请先强制回收再删除');
+    }
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('DELETE FROM leases WHERE account_id = ?').run(accountId);
+      db.prepare('DELETE FROM reset_jobs WHERE account_id = ?').run(accountId);
+      db.prepare('DELETE FROM audit_logs WHERE account_id = ?').run(accountId);
+      db.prepare('DELETE FROM scienceing_accounts WHERE id = ?').run(accountId);
+      db.exec('COMMIT');
+    } catch (err) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        /* 已回滚 */
+      }
+      throw err;
+    }
+
+    this.audit.record({
+      action: AUDIT_ACTION.ACCOUNT_DELETE,
+      result: AUDIT_RESULT.SUCCESS,
+      userId: adminUser.id,
+      accountId,
+      metadata: { accountCode: account.code, username: account.username },
+    });
+    return { accountId };
+  }
+
+  /** CSV 批量导入（前端解析、二次确认后整批提交）：逐条插入，冲突/非法行归入 failed。 */
+  bulkCreateAccounts(rows: Array<{ code?: string; username?: string }>, adminUser: AuthUser): {
+    created: number;
+    failed: Array<{ code: string; reason: string }>;
+  } {
+    let created = 0;
+    const failed: Array<{ code: string; reason: string }> = [];
+    for (const row of rows) {
+      try {
+        this.createAccount(row, adminUser);
+        created += 1;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : '导入失败';
+        failed.push({ code: row.code?.trim() || '(空)', reason: message });
+      }
+    }
+    this.audit.record({
+      action: AUDIT_ACTION.ACCOUNT_BULK_CREATE,
+      result: AUDIT_RESULT.SUCCESS,
+      userId: adminUser.id,
+      metadata: { created, failedCount: failed.length },
+    });
+    return { created, failed };
   }
 
   /** 生成 pending 密码（AES 加密）→ account RECYCLING → 回收活动租约 → 创建 reset_job。 */

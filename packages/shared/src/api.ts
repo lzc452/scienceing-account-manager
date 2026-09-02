@@ -172,6 +172,23 @@ export interface AdminAccountDto {
   createdAt: IsoTimestamp;
 }
 
+/** 新增科应账号请求（管理员手工录入，密码由系统托管占位密文，PRD §37） */
+export interface CreateAccountRequest {
+  code: string;
+  username: string;
+}
+
+/** CSV 批量导入账号请求（前端解析、二次确认后整批提交） */
+export interface BulkCreateAccountsRequest {
+  accounts: CreateAccountRequest[];
+}
+
+/** 批量导入结果（逐条插入，冲突/非法行归入 failed） */
+export interface BulkCreateResult {
+  created: number;
+  failed: Array<{ code: string; reason: string }>;
+}
+
 export interface AdminUserDto extends UserDto {
   createdAt: IsoTimestamp;
   updatedAt: IsoTimestamp;

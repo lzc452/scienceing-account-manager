@@ -47,6 +47,25 @@ export function renameAccount(accountId, dto) {
     : http('PATCH', `/admin/accounts/${accountId}`, dto)
 }
 
+/** 新增科应账号：POST /admin/accounts { code, username } */
+export function createAccount(dto) {
+  return USE_MOCK ? adminMockApi.createAccount(dto) : http('POST', '/admin/accounts', dto)
+}
+
+/** 删除科应账号：DELETE /admin/accounts/:id */
+export function deleteAccount(accountId) {
+  return USE_MOCK
+    ? adminMockApi.deleteAccount(accountId)
+    : http('DELETE', `/admin/accounts/${accountId}`)
+}
+
+/** CSV 批量导入（前端解析、二次确认后整批提交）：POST /admin/accounts/bulk */
+export function bulkCreateAccounts(accounts) {
+  return USE_MOCK
+    ? adminMockApi.bulkCreateAccounts(accounts)
+    : http('POST', '/admin/accounts/bulk', { accounts })
+}
+
 export function getAdminUsers() {
   return USE_MOCK ? adminMockApi.listUsers() : http('GET', '/admin/users')
 }
@@ -74,6 +93,7 @@ export function getAdminLogs(params) {
   if (USE_MOCK) return adminMockApi.listLogs(params)
   const qs = new URLSearchParams()
   if (params?.action) qs.set('action', params.action)
+  if (params?.hideActivity) qs.set('hideActivity', params.hideActivity)
   qs.set('page', String(params?.page ?? 1))
   qs.set('pageSize', String(params?.pageSize ?? 20))
   return http('GET', `/admin/logs?${qs.toString()}`)

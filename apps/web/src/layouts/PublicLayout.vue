@@ -1,8 +1,9 @@
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { LogOut } from 'lucide-vue-next'
 import Button from '@/components/ui/Button.vue'
+import Dialog from '@/components/ui/Dialog.vue'
 import PluginChip from '@/components/PluginChip.vue'
 import { authState, detectExtension, isLoggedIn, logout, pluginState } from '@/api'
 
@@ -23,13 +24,26 @@ const props = defineProps({
 
 const router = useRouter()
 const userLabel = computed(() => authState.user?.displayName || authState.user?.username || '')
+const isAdmin = computed(() => authState.user.role === "ADMIN" || false)
 
 // 布局层启动扩展握手检测（幂等），保证顶栏的助手状态在任何页面都可用
-onMounted(() => detectExtension())
+onMounted(() => {
+  console.log('PublicLayout mounted, detectExtension()')
+  // 显示authState.user
+  console.log('authState.user:', authState.user)
+  detectExtension()
+})
 
 async function onLogout() {
   await logout()
   router.push('/')
+}
+
+/** 退出登录二次确认弹窗 */
+const logoutOpen = ref(false)
+function confirmLogout() {
+  logoutOpen.value = false
+  onLogout()
 }
 </script>
 
@@ -74,7 +88,7 @@ async function onLogout() {
             <button
               type="button"
               class="inline-flex items-center gap-1.5 rounded-2xl px-2.5 py-1.5 text-sm font-medium text-mid-gray transition-colors hover:bg-surface-alt hover:text-ink"
-              @click="onLogout"
+              @click="logoutOpen = true"
             >
               <LogOut class="size-4" />
               <span class="hidden sm:inline">退出</span>
@@ -94,5 +108,17 @@ async function onLogout() {
         <slot />
       </div>
     </main>
+
+    <Dialog
+      :open="logoutOpen"
+      title="退出登录？"
+      description="退出后将返回登录页，需重新登录才能继续访问账号。"
+      @update:open="(v) => (logoutOpen = v)"
+    >
+      <template #footer>
+        <Button variant="outline" @click="logoutOpen = false">取消</Button>
+        <Button variant="default" @click="confirmLogout">确认退出</Button>
+      </template>
+    </Dialog>
   </div>
 </template>
