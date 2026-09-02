@@ -84,9 +84,9 @@ window.addEventListener('message', (e) => {
 - **监听**：仅 `pointerdown / keydown / wheel / touchstart`，且 `event.isTrusted === true`；不监听 `mousemove`（PRD §17.2）。
 - **排除插件 UI**：通过 `event.composedPath()` 判断是否命中 `#__scienceing_account_assistant__`，命中即 return（点击「立即归还」不续期，PRD §44）。
 - **节流**：content script 本地 2s 粗节流 → worker 5~10s 合并（读 config `activityThrottleSeconds`，夹紧 5~10）→ `POST /api/leases/{id}/activity`，body 仅 `{ leaseToken, event:'activity' }`（PRD §9，不采集搜索词/正文/输入/Cookie/密码）。
-- **悬浮窗五态**（Shadow DOM `#__scienceing_account_assistant__`，右下角 280px，24px 圆角）：① 正常（蓝点 + KY 代码 + 无操作/预计释放倒计时 + ProgressHairline + 立即归还）② 警告（≥25min 无操作，琥珀 soft）③ 临界（≥29min，琥珀，弹一次 Modal）④ 已释放（灰 outline + 返回看板）⑤ 连接异常（琥珀，冻结本地倒计时）。另有未绑定提示（PRD §16）。
+- **悬浮窗（缩小面板）**（Shadow DOM `#__scienceing_account_assistant__`，右下角 48×48，radius 10px，白底）：默认仅显示「预计释放时间环」——环形逆时针倒计时，环内居中文字「释放时间」（8px）。环色随剩余时间：5–30min 绿 / 1–5min 黄 / 0–1min 红（数据源仅后端 `expiresAt`）。点击面板展开小型浮层（账号 + 预计释放 + 立即归还 / 返回看板）。
+  - ① 正常（绿环）② 警告（黄环，剩余 1–5min）③ 临界（红环，剩余 <1min，自动弹一次提醒 Modal：继续使用 / 立即归还，含实时倒计时）④ 已释放（灰环「已释放」+ 弹窗仅「返回看板」）⑤ 连接异常（琥珀环「异常」，冻结本地倒计时）。另有未绑定（灰环「未绑」）。
 - **倒计时**：数据源仅后端 `expiresAt`；本地每 1s 只做渲染，不自行决定 `last_activity_at`（PRD §19）。
-- **折叠**：胶囊 `● KY-03 · 27:46`，折叠记忆存 `chrome.storage.session`（会话级）。
 - **立即归还**：Shadow DOM 确认弹窗 → 打开看板 `/my` 完成释放确认（release 端点需用户会话，扩展按 PRD §43 只持有 leaseToken，不存用户会话，故跳转看板完成）。
 
 ## 手动验证

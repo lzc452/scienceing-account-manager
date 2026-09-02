@@ -30,6 +30,16 @@ export class AdminController {
     return this.adminService.rename(id, dto, admin);
   }
 
+  /** 自动化健康检查（管理员登录 / 账号管理页 / 改密入口） */
+  @Post('health-check')
+  healthCheck(@CurrentUser() admin: AuthUser): Promise<{
+    lastCheckedAt: string | null;
+    items: Array<{ key: string; label: string; ok: boolean }>;
+  }> {
+    void admin;
+    return this.adminService.healthCheck();
+  }
+
   @Post('accounts/:id/force-release')
   forceRelease(@Param('id', ParseIntPipe) id: number, @CurrentUser() admin: AuthUser) {
     return this.adminService.forceRelease(id, admin);

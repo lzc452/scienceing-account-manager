@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { DatabaseService } from '../../db/database.service';
 import { AuditService } from '../../db/audit.service';
 import { ACCOUNT_STATUS, AUDIT_ACTION, AUDIT_RESULT, LEASE_STATUS, RELEASE_REASON } from '../../db/constants';
+import { AutomationService } from '../automation/automation.service';
 import { encryptSecret, serializePayload } from '../../crypto/secret-box';
 import { loadMasterKey } from '../../crypto/master-key';
 import { nowIso } from '../../db/config';
@@ -58,7 +59,24 @@ export class AdminService {
   constructor(
     private readonly dbService: DatabaseService,
     private readonly audit: AuditService,
+    private readonly automation: AutomationService,
   ) {}
+
+  /**
+   * 自动化健康检查（PRD §49）：委托 AutomationService 执行 Playwright Worker
+   * 三项检查（管理员登录 / 账号管理页 / 改密入口），映射为前端渲染结构。
+   */
+  async healthCheck(): Promise<{ lastCheckedAt: string | null; items: Array<{ key: string; label: string; ok: boolean }> }> {
+    const result = await this.automation.checkHealth();
+    return {
+      lastCheckedAt: result.checkedAt,
+      items: [
+        { key: 'admin-login', label: '管理员登录正常', ok: result.adminLoginOk },
+        { key: 'accounts-page', label: '账号管理页可访问', ok: result.accountPageOk },
+        { key: 'reset-entry', label: '改密入口正常', ok: result.resetEntryOk },
+      ],
+    };
+  }
 
   listAccounts(): AdminAccountView[] {
     const rows = this.dbService.db

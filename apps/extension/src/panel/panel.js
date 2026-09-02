@@ -6,73 +6,77 @@
  * 以经典脚本形式与 scienceing content script 注入同一隔离世界（manifest content_scripts
  * 的 js 数组按序注入），通过 globalThis.__scienceingPanel 暴露 render(payload)。
  *
- * 五态（§7.3）：① 正常（蓝点）② 警告（琥珀 soft，≥25min 无操作）③ 临界（琥珀，弹一次 Modal）
- * ④ 已释放（灰 outline）⑤ 连接异常（琥珀，冻结本地倒计时）；另有未绑定提示（PRD §16）。
+ * 缩小面板（本次改造）：
+ * - 默认形态为 48×48 白色圆角面板（radius 10px），仅显示「预计释放时间环」，不再遮挡操作区。
+ * - 环形逆时针倒计时，环内居中文字「释放时间」（8px）。
+ * - 环色随剩余时间变化：5–30min 绿 / 1–5min 黄 / 0–1min 红。
+ * - 点击面板展开小型浮层（账号 + 预计释放 + 立即归还 / 返回看板），避免常态化遮挡。
+ * - 0–1min 自动弹出提醒弹窗（含实时倒计时）：继续使用 / 立即归还；倒计时归零后弹窗切换为
+ *   已释放态，仅保留「返回看板」按钮。
  *
  * 行为规则（§7.4）：
- * - 倒计时数据源仅后端 expiresAt，本地只做渲染；连接异常时冻结。
- * - 悬浮窗/Modal 内交互不产生 Activity（由 scienceing content script 通过 composedPath 排除本 host）。
- * - 折叠记忆存 chrome.storage.session。
+ * - 倒计时数据源仅后端 expiresAt，本地只做渲染；连接异常时冻结本地倒计时（§7.4）。
+ * - 悬浮窗交互不产生 Activity（scienceing content script 通过 composedPath 排除本 host）。
  * - 中文字体用系统 CJK 回退，不加载字体文件；tabular-nums 对齐时间。
  */
+
 (() => {
   const HOST_ID = '__scienceing_account_assistant__';
-  const STORAGE_KEY = 'panelCollapsed';
 
-  // §4.1 语义色（十六进制内嵌，与主站同源；悬浮窗不依赖 Tailwind 运行时）
-  const C = {
-    blue: '#2563eb', blueBg: '#eff6ff', blueText: '#1d4ed8',
-    amber: '#d97706', amberBg: '#fffbeb', amberText: '#b45309',
-    gray: '#737373',
-    ink: '#171717', mid: '#525252', faint: '#a3a3a3',
-    border: '#e5e5e5', canvas: '#ffffff', ember: '#e7000b',
+  // 环色（语义色，与主站同源；悬浮窗不依赖 Tailwind 运行时）
+  const COLORS = {
+    green:  { ring: '#16a34a', label: '#15803d' },
+    amber:  { ring: '#f59e0b', label: '#b45309' },
+    red:    { ring: '#ef4444', label: '#dc2626' },
+    gray:   { ring: '#d4d4d4', label: '#737373' },
   };
 
   const CSS = `
     :host { all: initial; }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif; }
-    .host { position: fixed; right: 16px; bottom: 16px; z-index: 2147483646; width: 280px; font-size: 12px; line-height: 1.5; color: ${C.ink}; }
-    .card { background: ${C.canvas}; border: 1px solid ${C.border}; border-radius: 24px; box-shadow: 0 6px 24px rgba(0,0,0,0.08); padding: 16px; }
-    .pill { display: flex; align-items: center; gap: 8px; height: 36px; border-radius: 18px; background: ${C.canvas}; border: 1px solid ${C.border}; padding: 0 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); cursor: pointer; user-select: none; }
-    .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-    .dot.hollow { background: transparent; border: 1.5px solid currentColor; }
-    .badge { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 500; white-space: nowrap; }
-    .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
-    .title { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: ${C.ink}; }
-    .collapse { cursor: pointer; border: 0; background: transparent; color: ${C.faint}; font-size: 14px; line-height: 1; padding: 2px 4px; }
-    .code { font-size: 16px; font-weight: 600; letter-spacing: 0.2px; margin: 2px 0; }
-    .divider { height: 1px; background: ${C.border}; margin: 10px 0; }
-    .row { display: flex; align-items: center; justify-content: space-between; padding: 2px 0; }
-    .row .k { color: ${C.mid}; }
-    .row .v { font-variant-numeric: tabular-nums; font-weight: 500; }
-    .progress { height: 4px; border-radius: 2px; background: ${C.border}; margin: 10px 0 12px; overflow: hidden; }
-    .progress > i { display: block; height: 100%; border-radius: 2px; background: ${C.blue}; width: 100%; }
-    .progress.warn > i { background: ${C.amber}; }
-    .actions { display: flex; justify-content: flex-end; }
-    .btn { border: 1px solid ${C.ink}; background: ${C.ink}; color: #fff; border-radius: 18px; height: 32px; padding: 0 14px; font-size: 12px; font-weight: 500; cursor: pointer; }
-    .btn.ghost { background: transparent; color: ${C.ink}; border-color: ${C.border}; }
-    .btn.danger { background: ${C.ember}; border-color: ${C.ember}; }
-    .notice { display: flex; flex-direction: column; gap: 6px; }
-    .notice .big { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
-    .notice .cap { color: ${C.mid}; }
+    .host { position: fixed; z-index: 2147483646; font-size: 12px; line-height: 1.5; color: #171717; }
+    .ring-host { position: relative; width: 48px; height: 48px; background: #fff; border: 1px solid #e5e5e5; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,0.10); display: flex; align-items: center; justify-content: center; cursor: grab; user-select: none; touch-action: none; }
+    .ring-host.dragging { cursor: grabbing; }
+    .ring { position: absolute; inset: 0; width: 48px; height: 48px; pointer-events: none; }
+    .ring .track { fill: none; stroke: #ececec; stroke-width: 3.5; }
+    .ring .prog { fill: none; stroke-width: 3.5; stroke-linecap: round; transition: stroke 0.3s ease; }
+    .ring-label { position: relative; font-size: 8px; line-height: 1; font-weight: 600; letter-spacing: 0; pointer-events: none; }
+    .popover { position: absolute; right: 0; bottom: 56px; width: 216px; background: #fff; border: 1px solid #e5e5e5; border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.12); padding: 14px; }
+    .popover .ttl { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+    .popover .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+    .popover .code { font-size: 15px; font-weight: 600; letter-spacing: 0.3px; margin-bottom: 6px; }
+    .popover .row { display: flex; align-items: center; justify-content: space-between; padding: 3px 0; }
+    .popover .k { color: #737373; font-size: 11px; }
+    .popover .v { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 12px; }
+    .popover .acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+    .btn { border: 1px solid #171717; background: #171717; color: #fff; border-radius: 18px; height: 32px; padding: 0 14px; font-size: 12px; font-weight: 500; cursor: pointer; }
+    .btn.ghost { background: transparent; color: #171717; border-color: #e5e5e5; }
+    .btn.danger { background: #e7000b; border-color: #e7000b; }
     .modal { position: fixed; inset: 0; z-index: 2147483647; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.32); }
-    .modal .box { width: 288px; background: ${C.canvas}; border-radius: 24px; padding: 18px; box-shadow: 0 12px 40px rgba(0,0,0,0.16); }
+    .modal .box { width: 288px; background: #fff; border-radius: 24px; padding: 18px; box-shadow: 0 12px 40px rgba(0,0,0,0.16); }
     .modal .big { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
-    .modal .cap { color: ${C.mid}; margin-bottom: 14px; }
+    .modal .cap { color: #525252; margin-bottom: 14px; }
+    .modal .cap b { font-variant-numeric: tabular-nums; }
     .modal .row { display: flex; gap: 8px; justify-content: flex-end; }
   `;
 
   let host = null;
   let root = null;
   let wrapper = null;
-  let collapsed = false;
+  let modalEl = null;
   let status = null;
   let config = { warningSeconds: 300, criticalWarningSeconds: 60 };
   let serviceError = false;
   let state = 'unbound';
+  let expanded = false;
   let criticalShown = false;
-  let modalOpen = false;
+  let modalMode = null; // null | 'critical' | 'released' | 'confirm'
   let tickTimer = null;
+  let pos = null; // { x, y } 面板位置（拖拽）
+  let dragStart = null; // { x, y, px, py }
+  let dragMoved = false;
+
+  const RING_MAX_SECONDS = 1800; // 30min 刻度盘，环满表示 >=30min
 
   // -------------------------------------------------------------------------
   // 状态推导（倒计时仅来自后端 expiresAt；连接异常时冻结）
@@ -86,6 +90,10 @@
   function idleSeconds() {
     if (!status || !status.lastActivityAt) return 0;
     return Math.max(0, Math.floor((Date.now() - new Date(status.lastActivityAt).getTime()) / 1000));
+  }
+
+  function isActive() {
+    return state === 'normal' || state === 'warning' || state === 'critical';
   }
 
   function deriveState() {
@@ -114,118 +122,132 @@
   }
 
   function dotColor() {
-    if (state === 'normal') return C.blue;
-    if (state === 'released') return C.gray;
-    return C.amber; // warning / critical / error / unbound
+    if (state === 'normal') return COLORS.green.ring;
+    if (state === 'released') return COLORS.gray.ring;
+    if (state === 'error') return COLORS.amber.ring;
+    return COLORS.amber.ring; // warning / critical / unbound
   }
 
-  function softBadge(text, bg, fg) {
-    return `<span class="badge" style="background:${bg};color:${fg}">${esc(text)}</span>`;
+  // 环色：5–30min 绿 / 1–5min 黄 / 0–1min 红；非活跃态用灰/琥珀
+  function ringColors(remaining) {
+    if (state === 'released' || state === 'unbound') return COLORS.gray;
+    if (state === 'error') return COLORS.amber;
+    if (remaining >= 300) return COLORS.green;
+    if (remaining >= 60) return COLORS.amber;
+    return COLORS.red;
+  }
+
+  function ringRatio(remaining) {
+    if (remaining <= 0) return 0;
+    return Math.max(0, Math.min(1, remaining / RING_MAX_SECONDS));
+  }
+
+  // 逆时针环形路径（sweep-flag=0 = 屏幕坐标系下逆时针）。ratio=1 画整圆。
+  function ringPath(ratio) {
+    const cx = 24, cy = 24, r = 19;
+    if (ratio >= 0.9999) {
+      return `M ${cx} ${(cy - r).toFixed(2)} A ${r} ${r} 0 1 0 ${cx} ${(cy + r).toFixed(2)} A ${r} ${r} 0 1 0 ${cx} ${(cy - r).toFixed(2)} Z`;
+    }
+    if (ratio <= 0.0001) return '';
+    const angle = ratio * 2 * Math.PI; // 自顶部逆时针展开
+    const x = cx - r * Math.sin(angle);
+    const y = cy - r * Math.cos(angle);
+    const largeArc = ratio > 0.5 ? 1 : 0;
+    return `M ${cx} ${(cy - r).toFixed(2)} A ${r} ${r} 0 ${largeArc} 0 ${x.toFixed(2)} ${y.toFixed(2)}`;
   }
 
   // -------------------------------------------------------------------------
   // 视图渲染
   // -------------------------------------------------------------------------
 
-  function buildView() {
-    if (collapsed && (state === 'normal' || state === 'warning' || state === 'critical')) {
-      return `<div class="pill" data-action="toggle">
-        <span class="dot" style="background:${dotColor()}"></span>
-        <span style="font-weight:500;flex:none">${esc(status?.accountCode ?? '—')}</span>
-        <span style="flex:1"></span>
-        <span id="sci-pill-cd" style="font-variant-numeric:tabular-nums;color:${C.mid}">${mmss(remainingSeconds())}</span>
-        <span style="color:${C.faint}">▸</span>
-      </div>`;
-    }
-
-    if (state === 'unbound') {
-      return `<div class="card">
-        <div class="head"><div class="title"><span class="dot" style="background:${C.amber}"></span>科应共享账号</div></div>
-        <div class="notice">
-          <div class="badge" style="background:${C.amberBg};color:${C.amberText}">未绑定租约</div>
-          <div class="cap">当前科应页面未与账号租约绑定，请从「科应账号看板」重新打开。</div>
-        </div>
-      </div>`;
-    }
-
-    if (state === 'released') {
-      return `<div class="card">
-        <div class="head"><div class="title"><span class="dot hollow" style="color:${C.gray}"></span>账号已自动释放</div></div>
-        <div class="cap" style="color:${C.mid}">${esc(status?.accountCode ?? '')} 已重新进入账号池</div>
-        <div class="divider"></div>
-        <div class="actions"><button class="btn" data-action="dashboard">返回看板</button></div>
-      </div>`;
-    }
-
-    if (state === 'error') {
-      return `<div class="card">
-        <div class="head"><div class="title"><span class="dot" style="background:${C.amber}"></span>科应共享账号</div></div>
-        <div class="notice">
-          ${softBadge('账号管理服务连接异常', C.amberBg, C.amberText)}
-          <div class="cap">已有租约不受影响，恢复后将按最后活动时间计算。</div>
-        </div>
-      </div>`;
-    }
-
-    if (state === 'warning' || state === 'critical') {
-      const label = state === 'critical' ? '科应账号即将自动释放' : '已连续 25 分钟无操作';
-      return `<div class="card">
-        <div class="head"><div class="title"><span class="dot" style="background:${C.amber}"></span>科应共享账号</div>
-          <button class="collapse" data-action="toggle">−</button></div>
-        <div class="notice">
-          ${softBadge(label, C.amberBg, C.amberText)}
-          <div class="big">${mmss(remainingSeconds())} 后自动释放</div>
-          <div class="cap">继续操作科应页面即可保持使用。</div>
-        </div>
-      </div>`;
-    }
-
-    // ① 正常（ACTIVE）
-    const progressClass = state === 'warning' || state === 'critical' ? ' warn' : '';
-    return `<div class="card">
-      <div class="head">
-        <div class="title"><span class="dot" style="background:${C.blue}"></span>科应共享账号</div>
-        <button class="collapse" data-action="toggle">−</button>
-      </div>
-      <div class="code">${esc(status?.accountCode ?? '')}</div>
-      ${softBadge('使用中', C.blueBg, C.blueText)}
-      <div class="divider"></div>
-      <div class="row"><span class="k">无操作</span><span class="v" id="sci-idle">${mmss(idleSeconds())}</span></div>
-      <div class="row"><span class="k">预计释放</span><span class="v" id="sci-countdown">${mmss(remainingSeconds())}</span></div>
-      <div class="progress${progressClass}"><i id="sci-progress" style="width:${progressRatio()}%"></i></div>
-      <div class="actions"><button class="btn" data-action="release">立即归还</button></div>
+  function ringSvg(progD, progColor, labelText, labelColor) {
+    return `<div class="ring-host" title="拖拽移动 · 点击查看使用中信息" role="button" tabindex="0" aria-label="科应账号倒计时 ${esc(labelText)}，拖拽可移动位置，点击查看使用中信息">
+      <svg class="ring" viewBox="0 0 48 48" aria-hidden="true">
+        <circle class="track" cx="24" cy="24" r="19"></circle>
+        <path id="sci-ring" class="prog" d="${progD}" style="stroke:${progColor}"></path>
+      </svg>
+      <span class="ring-label" id="sci-ring-text" style="color:${labelColor}">${esc(labelText)}</span>
     </div>`;
   }
 
-  function progressRatio() {
-    if (!status || !status.expiresAt || !status.lastActivityAt) return 100;
-    const totalMs = new Date(status.expiresAt).getTime() - new Date(status.lastActivityAt).getTime();
-    if (!(totalMs > 0)) return 0;
-    return Math.max(0, Math.min(100, Math.round((remainingSeconds() * 1000 / totalMs) * 100)));
+  function popoverHtml() {
+    if (!status) return '';
+    const c = ringColors(remainingSeconds());
+    return `<div class="popover" role="dialog" aria-label="科应账号详情">
+      <div class="ttl"><span class="dot" style="background:${dotColor()}"></span>科应共享账号</div>
+      <div class="code">${esc(status.accountCode ?? '—')}</div>
+      <div class="row"><span class="k">状态</span><span class="v">使用中 · ACTIVE</span></div>
+      <div class="row"><span class="k">无操作</span><span class="v" id="sci-exp-idle">${mmss(idleSeconds())}</span></div>
+      <div class="row"><span class="k">预计释放</span><span class="v" id="sci-exp-cd">${mmss(remainingSeconds())}</span></div>
+      <div class="acts">
+        <button class="btn ghost" data-action="dashboard">返回看板</button>
+        <button class="btn danger" data-action="release">立即归还</button>
+      </div>
+    </div>`;
+  }
+
+  function buildView() {
+    let ringHtml;
+    if (state === 'unbound') {
+      ringHtml = ringSvg('', COLORS.gray.ring, '未绑', COLORS.gray.label);
+    } else if (state === 'error') {
+      ringHtml = ringSvg(ringPath(1), COLORS.amber.ring, '异常', COLORS.amber.label);
+    } else if (state === 'released') {
+      ringHtml = ringSvg('', COLORS.gray.ring, '已释放', COLORS.gray.label);
+    } else {
+      // ① 正常 / ② 警告 / ③ 临界：活性态，环色按剩余时间
+      const remaining = remainingSeconds();
+      const c = ringColors(remaining);
+      ringHtml = ringSvg(ringPath(ringRatio(remaining)), c.ring, '释放时间', c.label);
+    }
+
+    const isActive = state === 'normal' || state === 'warning' || state === 'critical';
+    const pop = expanded && isActive ? popoverHtml() : '';
+    return ringHtml + pop;
   }
 
   function render() {
     const newState = deriveState();
-    const showCritical = newState === 'critical' && !criticalShown;
+    const prev = state;
     state = newState;
 
-    if (showCritical) criticalShown = true;
-    if (newState !== 'critical') criticalShown = false;
+    // 离开临界/已释放后，允许下次再弹临界提醒
+    if (newState !== 'critical' && newState !== 'released') criticalShown = false;
 
-    if (!modalOpen) wrapper.innerHTML = buildView();
-    if (showCritical && !modalOpen) showCriticalModal();
+    // 弹窗状态机
+    if (newState === 'critical' && !criticalShown && modalMode !== 'released' && modalMode !== 'confirm') {
+      criticalShown = true;
+      openModal('critical');
+    } else if (newState === 'released' && modalMode !== 'released') {
+      openModal('released');
+    }
+
+    wrapper.innerHTML = buildView();
+    updateDynamic();
+  }
+
+  function updateRing() {
+    if (state === 'error') return; // 连接异常冻结本地倒计时（§7.4）
+    const progEl = wrapper.querySelector('#sci-ring');
+    const labelEl = wrapper.querySelector('#sci-ring-text');
+    if (!progEl && !labelEl) return;
+    const remaining = remainingSeconds();
+    const c = ringColors(remaining);
+    const d = ringPath(ringRatio(remaining));
+    if (progEl) { progEl.setAttribute('d', d); progEl.style.stroke = c.ring; }
+    if (labelEl) labelEl.style.color = c.label;
   }
 
   function updateDynamic() {
-    if (serviceError) return; // 连接异常冻结本地倒计时（§7.4）
-    const idleEl = wrapper.querySelector('#sci-idle');
-    const cdEl = wrapper.querySelector('#sci-countdown');
-    const pillCdEl = wrapper.querySelector('#sci-pill-cd');
-    const pEl = wrapper.querySelector('#sci-progress');
-    if (idleEl) idleEl.textContent = mmss(idleSeconds());
-    if (cdEl) cdEl.textContent = mmss(remainingSeconds());
-    if (pillCdEl) pillCdEl.textContent = mmss(remainingSeconds());
-    if (pEl) pEl.style.width = `${progressRatio()}%`;
+    updateRing();
+    const expCd = wrapper.querySelector('#sci-exp-cd');
+    if (expCd) expCd.textContent = mmss(remainingSeconds());
+    const expIdle = wrapper.querySelector('#sci-exp-idle');
+    if (expIdle) expIdle.textContent = mmss(idleSeconds());
+    if (modalMode === 'critical') {
+      const mcd = modalEl?.querySelector('#sci-modal-cd');
+      if (mcd) mcd.textContent = mmss(remainingSeconds());
+    }
   }
 
   function tick() {
@@ -238,41 +260,31 @@
   }
 
   // -------------------------------------------------------------------------
-  // 临界弹窗（弹一次）/ 归还确认弹窗
+  // 弹窗（临界提醒 / 已释放 / 归还确认）
   // -------------------------------------------------------------------------
 
-  function showCriticalModal() {
-    const modal = document.createElement('div');
-    modal.className = 'modal';
-    modal.innerHTML = `<div class="box">
-      <div class="big">⚠ 科应账号即将自动释放</div>
-      <div class="cap">已连续 29 分钟无操作，${mmss(remainingSeconds())} 后自动释放。继续操作页面即可保持使用。</div>
-      <div class="row">
-        <button class="btn ghost" data-act="dismiss">继续使用</button>
-        <button class="btn" data-act="release">立即归还</button>
-      </div>
-    </div>`;
-    wrapper.appendChild(modal);
-    modalOpen = true;
-    modal.addEventListener('click', (e) => {
-      const act = e.target?.closest?.('[data-act]')?.dataset?.act;
-      if (act === 'dismiss') {
-        modalOpen = false;
-        modal.remove();
-        render();
-      } else if (act === 'release') {
-        modalOpen = false;
-        modal.remove();
-        openDashboard('/my');
-        render();
-      }
-    });
-  }
-
-  function showReleaseConfirm() {
-    const modal = document.createElement('div');
-    modal.className = 'modal';
-    modal.innerHTML = `<div class="box">
+  function modalMarkup(mode) {
+    if (mode === 'critical') {
+      return `<div class="box">
+        <div class="big">⚠ 科应账号即将自动释放</div>
+        <div class="cap">预计 <b id="sci-modal-cd">${mmss(remainingSeconds())}</b> 后自动释放。继续操作科应页面即可保持使用。</div>
+        <div class="row">
+          <button class="btn ghost" data-act="dismiss">继续使用</button>
+          <button class="btn danger" data-act="release">立即归还</button>
+        </div>
+      </div>`;
+    }
+    if (mode === 'released') {
+      return `<div class="box">
+        <div class="big">账号已自动释放</div>
+        <div class="cap">释放时间已到，账号已重新进入账号池。</div>
+        <div class="row">
+          <button class="btn" data-act="dashboard">返回看板</button>
+        </div>
+      </div>`;
+    }
+    // confirm
+    return `<div class="box">
       <div class="big">归还科应账号？</div>
       <div class="cap">归还后将重置密码并退出当前会话。</div>
       <div class="row">
@@ -280,21 +292,42 @@
         <button class="btn danger" data-act="confirm">确认归还</button>
       </div>
     </div>`;
-    wrapper.appendChild(modal);
-    modalOpen = true;
-    modal.addEventListener('click', (e) => {
-      const act = e.target?.closest?.('[data-act]')?.dataset?.act;
-      if (act === 'cancel') {
-        modalOpen = false;
-        modal.remove();
-        render();
-      } else if (act === 'confirm') {
-        modalOpen = false;
-        modal.remove();
-        openDashboard('/my');
-        render();
-      }
-    });
+  }
+
+  function openModal(mode) {
+    modalMode = mode;
+    if (!modalEl) {
+      modalEl = document.createElement('div');
+      modalEl.className = 'modal';
+      root.appendChild(modalEl);
+      modalEl.addEventListener('click', onModalClick);
+    }
+    modalEl.innerHTML = modalMarkup(mode);
+  }
+
+  function closeModal() {
+    modalMode = null;
+    if (modalEl) { modalEl.remove(); modalEl = null; }
+  }
+
+  function onModalClick(event) {
+    const act = event.target?.closest?.('[data-act]')?.dataset?.act;
+    if (!act) return;
+    if (act === 'dismiss') {
+      // 继续使用：关闭提醒（criticalShown 保持，避免重复弹出）
+      closeModal();
+    } else if (act === 'release') {
+      // 立即归还：进入确认弹窗
+      openModal('confirm');
+    } else if (act === 'cancel') {
+      closeModal();
+    } else if (act === 'confirm') {
+      closeModal();
+      openDashboard('/my');
+    } else if (act === 'dashboard') {
+      closeModal();
+      openDashboard('/');
+    }
   }
 
   function openDashboard(path) {
@@ -309,18 +342,90 @@
     const el = event.target?.closest?.('[data-action]');
     if (!el) return;
     const action = el.dataset.action;
-    if (action === 'toggle') {
-      collapsed = !collapsed;
-      try {
-        if (chrome.storage?.session) void chrome.storage.session.set({ [STORAGE_KEY]: collapsed });
-      } catch {
-        // 忽略
-      }
-      render();
-    } else if (action === 'release') {
-      showReleaseConfirm();
+    if (action === 'release') {
+      openModal('confirm');
     } else if (action === 'dashboard') {
       openDashboard('/');
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 拖拽 + 位置持久化（点击/回车切换信息浮层；拖拽移动不触发切换）
+  // -------------------------------------------------------------------------
+
+  function applyPos() {
+    if (!wrapper || !pos) return;
+    wrapper.style.left = pos.x + 'px';
+    wrapper.style.top = pos.y + 'px';
+    wrapper.style.right = 'auto';
+    wrapper.style.bottom = 'auto';
+  }
+
+  async function loadPos() {
+    try {
+      const d = await chrome.storage?.session?.get(['panelPos']);
+      return d?.panelPos ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  function savePos(p) {
+    try { void chrome.storage?.session?.set({ panelPos: p }); } catch { /* 忽略 */ }
+  }
+
+  function togglePanel() {
+    if (!isActive()) { expanded = false; return; }
+    expanded = !expanded;
+    wrapper.innerHTML = buildView();
+  }
+
+  function onPointerDown(e) {
+    if (e.button !== 0) return;
+    const hostEl = e.target?.closest?.('.ring-host');
+    if (!hostEl) return;
+    if (e.target?.closest?.('[data-action]')) return; // 浮层按钮不触发拖拽
+    dragStart = { x: e.clientX, y: e.clientY, px: pos.x, py: pos.y };
+    dragMoved = false;
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp, { once: true });
+  }
+
+  function onPointerMove(e) {
+    if (!dragStart) return;
+    const dx = e.clientX - dragStart.x;
+    const dy = e.clientY - dragStart.y;
+    if (!dragMoved && Math.hypot(dx, dy) > 4) {
+      dragMoved = true;
+      wrapper.classList.add('dragging');
+    }
+    if (dragMoved) {
+      const w = 48, h = 48;
+      let nx = dragStart.px + dx;
+      let ny = dragStart.py + dy;
+      nx = Math.max(0, Math.min(window.innerWidth - w, nx));
+      ny = Math.max(0, Math.min(window.innerHeight - h, ny));
+      pos.x = nx; pos.y = ny;
+      applyPos();
+    }
+  }
+
+  function onPointerUp() {
+    window.removeEventListener('pointermove', onPointerMove);
+    const moved = dragMoved;
+    dragStart = null;
+    dragMoved = false;
+    wrapper.classList.remove('dragging');
+    if (!moved) togglePanel(); // 未移动 = 点击
+    else savePos(pos); // 拖拽结束持久化位置
+  }
+
+  function onRingKey(e) {
+    const hostEl = e.target?.closest?.('.ring-host');
+    if (!hostEl) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      togglePanel();
     }
   }
 
@@ -337,13 +442,12 @@
     root.appendChild(wrapper);
     (document.body || document.documentElement).appendChild(host);
     root.addEventListener('click', onClick);
+    root.addEventListener('pointerdown', onPointerDown);
+    root.addEventListener('keydown', onRingKey);
 
-    try {
-      const data = await chrome.storage?.session?.get([STORAGE_KEY]);
-      collapsed = Boolean(data?.[STORAGE_KEY]);
-    } catch {
-      collapsed = false;
-    }
+    pos = await loadPos();
+    if (!pos) pos = { x: window.innerWidth - 48 - 16, y: window.innerHeight - 48 - 16 };
+    applyPos();
 
     if (!tickTimer) tickTimer = setInterval(tick, 1000);
   }

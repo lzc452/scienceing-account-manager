@@ -12,6 +12,7 @@ import Card from '@/components/ui/Card.vue'
 import Dialog from '@/components/ui/Dialog.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import { toast } from '@/components/ui/toast'
+import { Check, Copy } from 'lucide-vue-next'
 import { formatDuration, getCurrentLease, pluginState, releaseLease } from '@/api'
 import { toStatusKind } from '@/lib/status'
 
@@ -26,6 +27,25 @@ const account = ref(null)
 const releasing = ref(false)
 const confirmOpen = ref(false)
 const releasePending = ref(false)
+const usernameCopied = ref(false)
+
+let usernameCopyTimer
+
+const accountUsername = computed(() => account.value?.username || lease.value?.accountUsername || '')
+
+async function copyUsername() {
+  if (!accountUsername.value) return
+  try {
+    await navigator.clipboard.writeText(accountUsername.value)
+  } catch {
+    // 非安全上下文 / 权限拒绝时静默失败
+  }
+  usernameCopied.value = true
+  if (usernameCopyTimer !== undefined) window.clearTimeout(usernameCopyTimer)
+  usernameCopyTimer = window.setTimeout(() => {
+    usernameCopied.value = false
+  }, 6000)
+}
 
 let pollTimer
 
@@ -51,6 +71,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.clearInterval(pollTimer)
   window.removeEventListener('message', onExtensionAck)
+  if (usernameCopyTimer !== undefined) window.clearTimeout(usernameCopyTimer)
 })
 
 /** 扩展 BIND_ACK 反馈（协议见 apps/extension/src/content/dashboard.js）。 */
@@ -157,6 +178,25 @@ async function onRelease() {
             <Badge v-if="pluginState.status === 'ready'" tone="available">
               助手已就绪 · {{ pluginState.version }}
             </Badge>
+          </div>
+
+          <div class="mt-6">
+            <div class="mb-1.5 text-xs font-medium text-mid-gray">科应账号</div>
+            <div class="flex items-center gap-2">
+              <code class="min-w-0 flex-1 truncate rounded-2xl bg-canvas px-3 py-2 text-sm text-ink tabular-nums">
+                {{ accountUsername || '—' }}
+              </code>
+              <button
+                type="button"
+                class="inline-flex h-8 shrink-0 items-center gap-1 rounded-2xl border border-hairline bg-transparent px-2.5 text-xs font-medium text-ink transition-colors hover:bg-surface-alt"
+                :aria-label="usernameCopied ? '已复制' : '复制科应账号'"
+                @click="copyUsername"
+              >
+                <Check v-if="usernameCopied" class="size-4" />
+                <Copy v-else class="size-4" />
+                {{ usernameCopied ? '已复制' : '复制' }}
+              </button>
+            </div>
           </div>
 
           <div class="mt-6">

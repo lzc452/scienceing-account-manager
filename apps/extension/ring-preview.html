@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>科应悬浮窗 · 48px 环形倒计时预览</title>
+<style>
+  body { font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif; background:#f5f5f5; color:#171717; padding:24px; }
+  h1 { font-size:18px; font-weight:600; margin:0 0 4px; }
+  p.sub { color:#525252; font-size:13px; margin:0 0 20px; }
+  .grid { display:flex; flex-wrap:wrap; gap:28px; align-items:flex-start; }
+  .cell { display:flex; flex-direction:column; align-items:center; gap:8px; }
+  .cap { font-size:12px; color:#525252; }
+  .ring-host { position:relative; width:48px; height:48px; background:#fff; border:1px solid #e5e5e5; border-radius:10px; box-shadow:0 4px 16px rgba(0,0,0,0.10); display:flex; align-items:center; justify-content:center; }
+  .ring { position:absolute; inset:0; width:48px; height:48px; pointer-events:none; }
+  .ring .track { fill:none; stroke:#ececec; stroke-width:3.5; }
+  .ring .prog { fill:none; stroke-width:3.5; stroke-linecap:round; transition:stroke .3s ease; }
+  .ring-label { position:relative; font-size:8px; line-height:1; font-weight:600; pointer-events:none; }
+  .controls { margin-top:24px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  button { border:1px solid #171717; background:#171717; color:#fff; border-radius:18px; height:32px; padding:0 14px; font-size:12px; font-weight:500; cursor:pointer; }
+  button.ghost { background:transparent; color:#171717; border-color:#e5e5e5; }
+  code { background:#ececec; padding:1px 6px; border-radius:6px; font-size:12px; }
+  .dragwrap { position: fixed; left: 40px; bottom: 40px; z-index: 50; }
+  .dragwrap .ring-host { cursor: grab; }
+  .dragwrap .ring-host.dragging { cursor: grabbing; }
+  .ppop { position:absolute; right:0; bottom:56px; width:216px; background:#fff; border:1px solid #e5e5e5; border-radius:14px; box-shadow:0 10px 30px rgba(0,0,0,0.12); padding:14px; }
+  .ppop .ttl { font-size:12px; font-weight:600; margin-bottom:8px; }
+  .ppop .row { display:flex; justify-content:space-between; padding:3px 0; }
+  .ppop .k { color:#737373; font-size:11px; }
+  .ppop .v { font-variant-numeric:tabular-nums; font-weight:600; font-size:12px; }
+</style>
+</head>
+<body>
+  <h1>科应悬浮窗 · 48px 环形倒计时预览</h1>
+  <p class="sub">环形逆时针倒计时 · 环内「释放时间」8px · 绿(5–30min) / 黄(1–5min) / 红(0–1min)。下面是复用 panel.js 同一套 <code>ringPath</code> / <code>ringColors</code> 逻辑的静态与实时演示。</p>
+
+  <div class="grid" id="staticGrid"></div>
+
+  <div class="controls">
+    <span class="cap">实时倒计时（每 1s）：</span>
+    <button class="ghost" onclick="setLive(1740)">设 29:00（绿）</button>
+    <button class="ghost" onclick="setLive(240)">设 04:00（黄）</button>
+    <button class="ghost" onclick="setLive(45)">设 00:45（红）</button>
+    <button class="ghost" onclick="setLive(0)">设 00:00（已释放）</button>
+  </div>
+  <div class="grid" id="liveGrid" style="margin-top:16px;"></div>
+
+  <p class="sub" style="margin-top:28px;">交互演示（左下角）：<b>拖拽</b>移动环形面板；<b>点击</b>环形面板弹出当前「使用中 · ACTIVE」信息。复用 panel.js 同一套逻辑。</p>
+  <div class="dragwrap" id="dragwrap">
+    <div class="ppop" id="dragpop" style="display:none">
+      <div class="ttl">科应共享账号</div>
+      <div class="row"><span class="k">状态</span><span class="v">使用中 · ACTIVE</span></div>
+      <div class="row"><span class="k">无操作</span><span class="v" id="d-idle">00:12</span></div>
+      <div class="row"><span class="k">预计释放</span><span class="v" id="d-cd">--:--</span></div>
+    </div>
+    <div class="ring-host" id="dragring" title="拖拽移动 · 点击查看使用中信息" tabindex="0" role="button" aria-label="科应账号倒计时，拖拽移动，点击查看使用中信息"></div>
+  </div>
+
+<script>
+  const COLORS = {
+    green:  { ring:'#16a34a', label:'#15803d' },
+    amber:  { ring:'#f59e0b', label:'#b45309' },
+    red:    { ring:'#ef4444', label:'#dc2626' },
+    gray:   { ring:'#d4d4d4', label:'#737373' },
+  };
+  const RING_MAX_SECONDS = 1800;
+  function ringPath(ratio) {
+    const cx=24, cy=24, r=19;
+    if (ratio >= 0.9999) return `M ${cx} ${(cy-r).toFixed(2)} A ${r} ${r} 0 1 0 ${cx} ${(cy+r).toFixed(2)} A ${r} ${r} 0 1 0 ${cx} ${(cy-r).toFixed(2)} Z`;
+    if (ratio <= 0.0001) return '';
+    const angle = ratio * 2 * Math.PI;
+    const x = cx - r * Math.sin(angle);
+    const y = cy - r * Math.cos(angle);
+    const largeArc = ratio > 0.5 ? 1 : 0;
+    return `M ${cx} ${(cy-r).toFixed(2)} A ${r} ${r} 0 ${largeArc} 0 ${x.toFixed(2)} ${y.toFixed(2)}`;
+  }
+  function ringRatio(remaining){ if (remaining<=0) return 0; return Math.max(0, Math.min(1, remaining/RING_MAX_SECONDS)); }
+  function ringColors(remaining){
+    if (remaining >= 300) return COLORS.green;
+    if (remaining >= 60) return COLORS.amber;
+    return COLORS.red;
+  }
+  function mmss(s){ s=Math.max(0,Math.floor(s||0)); return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0'); }
+
+  function ringHtml(remaining, labelOverride){
+    const c = remaining > 0 ? ringColors(remaining) : COLORS.gray;
+    const label = labelOverride || (remaining > 0 ? '释放时间' : '已释放');
+    return `<div class="ring-host"><svg class="ring" viewBox="0 0 48 48">
+      <circle class="track" cx="24" cy="24" r="19"></circle>
+      <path class="prog" d="${ringPath(ringRatio(remaining))}" style="stroke:${c.ring}"></path>
+    </svg><span class="ring-label" style="color:${c.label}">${label}</span></div>`;
+  }
+
+  // 静态样例
+  const samples = [
+    { remaining: 1740, label: '29:00 · 绿' },
+    { remaining: 240,  label: '04:00 · 黄' },
+    { remaining: 45,   label: '00:45 · 红' },
+    { remaining: 0,    label: '00:00 · 已释放' },
+  ];
+  const sg = document.getElementById('staticGrid');
+  samples.forEach(s => {
+    const cell = document.createElement('div'); cell.className='cell';
+    cell.innerHTML = ringHtml(s.remaining) + `<div class="cap">${s.label}</div>`;
+    sg.appendChild(cell);
+  });
+
+  // 实时样例
+  let liveRemaining = 1740;
+  const lg = document.getElementById('liveGrid');
+  function renderLive(){
+    lg.innerHTML = '';
+    const cell = document.createElement('div'); cell.className='cell';
+    cell.innerHTML = ringHtml(liveRemaining) + `<div class="cap">实时：${mmss(liveRemaining)}（${liveRemaining>=300?'绿':liveRemaining>=60?'黄':'红/已释放'}）</div>`;
+    lg.appendChild(cell);
+  }
+  function setLive(v){ liveRemaining = v; renderLive(); }
+  renderLive();
+  setInterval(() => {
+    if (liveRemaining > 0) { liveRemaining -= 1; renderLive(); }
+  }, 1000);
+
+  // 交互演示：拖拽移动 + 点击弹信息（与 panel.js 同源逻辑）
+  const dw = document.getElementById('dragwrap');
+  const dring = document.getElementById('dragring');
+  const dpop = document.getElementById('dragpop');
+  let dpos = { x: 40, y: Math.max(40, window.innerHeight - 96) };
+  function applyD(){ dw.style.left = dpos.x + 'px'; dw.style.top = dpos.y + 'px'; }
+  applyD();
+  function paintDring(){ dring.innerHTML = ringHtml(liveRemaining); }
+  paintDring();
+  setInterval(() => { if (liveRemaining > 0) paintDring(); }, 1000);
+  let dstart = null, dmoved = false;
+  dring.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    dstart = { x: e.clientX, y: e.clientY, px: dpos.x, py: dpos.y };
+    dmoved = false;
+    window.addEventListener('pointermove', dmove);
+    window.addEventListener('pointerup', dup, { once: true });
+  });
+  function dmove(e){
+    if (!dstart) return;
+    const dx = e.clientX - dstart.x, dy = e.clientY - dstart.y;
+    if (!dmoved && Math.hypot(dx, dy) > 4) { dmoved = true; dring.classList.add('dragging'); }
+    if (dmoved) {
+      dpos.x = Math.max(0, Math.min(window.innerWidth - 48, dstart.px + dx));
+      dpos.y = Math.max(0, Math.min(window.innerHeight - 48, dstart.py + dy));
+      applyD();
+    }
+  }
+  function dup(){
+    window.removeEventListener('pointermove', dmove);
+    const m = dmoved; dstart = null; dmoved = false; dring.classList.remove('dragging');
+    if (!m) {
+      const show = dpop.style.display !== 'block';
+      dpop.style.display = show ? 'block' : 'none';
+      if (show) { document.getElementById('d-cd').textContent = mmss(liveRemaining); }
+    }
+  }
+  dring.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); dup2(); }
+  });
+  function dup2(){
+    const show = dpop.style.display !== 'block';
+    dpop.style.display = show ? 'block' : 'none';
+    if (show) document.getElementById('d-cd').textContent = mmss(liveRemaining);
+  }
+</script>
+</body>
+</html>
