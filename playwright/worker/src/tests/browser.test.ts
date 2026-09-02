@@ -5,7 +5,7 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { chromium, type Browser } from 'playwright';
-import type { WorkerConfig } from '../config';
+import { defaultLoginUrl, type WorkerConfig } from '../config';
 import { isAuthenticated, loginAdmin, openAuthenticatedSession, saveStorageState } from '../auth';
 import { performReset, ResetVerificationError } from '../reset-flow';
 import { ResetWorker } from '../worker';
@@ -13,17 +13,18 @@ import { ResetWorker } from '../worker';
 /**
  * 浏览器流程测试（依赖系统 Chrome，channel: 'chrome'）。
  *
+ * mock 页 scienceing-admin.html 已按真实科应 DOM 重构：
+ *  登录(div-id 输入框+协议) → 跳 /search → 账号管理(CSS Modules 前缀+td[title=username]+iconfont)
+ *  → AntD 弹窗(radio 自定义密码+通知设置) → toast「重置成功」。
+ *
+ * 注意：td[title=username] 的 title 属性是科应共享账号的 username（不是 code），
+ * Worker 的 accountUsername 入参即此 username。
+ *
  * 在具备浏览器二进制、且允许浏览器子进程 IPC（named pipe）的环境中运行：
  *   node --test dist/tests/browser.test.js
  *
  * 在 DSH 受限沙箱中 Chromium 因 named pipe 被禁（mojo platform_channel 拒绝访问）无法启动，
  * 这里会捕获 EPERM 并把所有用例标记为 skip，同时保留纯逻辑单测（logic.test.ts）作为可运行证据。
- *
- * Windows + node:test 兼容性说明：当测试文件内出现第二个 Chrome 实例（ResetWorker 自行 launch）
- * 时，node test runner 可能因孙子进程继承 stdout 管道句柄而挂起/崩溃（本机 Node 22.22.2 复现）。
- * 这是 runner 环境问题而非业务缺陷；同等逻辑已用独立脚本在 mock 页面上验证通过
- * （KY-04 失败重试 FAILED/attempts 正确、串行队列 SUCCESS、会话过期自动重登回写）。
- * 建议在 CI（Linux）或开发机上跑本套件。
  */
 
 function repoRoot(): string {
@@ -76,13 +77,14 @@ after(async () => {
 function config(overrides?: Partial<WorkerConfig>): WorkerConfig {
   return {
     adminUrl: baseUrl,
+    loginUrl: defaultLoginUrl(baseUrl),
     adminUsername: 'admin',
     adminPassword: 'admin123',
     storageStatePath: path.join(tempDir, 'admin.json'),
     browserChannel: 'chrome',
     headless: true,
-    defaultTimeoutMs: 5000,
-    resetSuccessText: '修改成功',
+    defaultTimeoutMs: 4000,
+    resetSuccessText: '重置成功',
     retryDelayMs: 10,
     maxAttempts: 3,
     ...overrides,
@@ -118,28 +120,31 @@ test('管理员登录后生成 storageState（PRD §29）', async (t) => {
   assert.ok(hasSession, 'storageState 应包含管理员会话标记');
 });
 
-test('改密成功路径：出现“修改成功”才判定成功（PRD §31）', async (t) => {
+test('改密成功路径：按 username 搜索→自定义密码→取消通知→toast「重置成功」（PRD §31）', async (t) => {
   const b = requireBrowser(t);
   if (!b) return;
   const cfg = config();
   const { context, page } = await openAuthenticatedSession(b, cfg);
   try {
-    const outcome = await performReset(page, cfg, 'KY-01', 'NewPass!123');
+    const outcome = await performReset(page, cfg, 'ky01@highpowertech.com', 'NewPass!123');
     assert.equal(outcome.ok, true);
-    assert.equal(await page.getByText('修改成功', { exact: true }).isVisible(), true);
+    assert.equal(await page.getByText('重置成功', { exact: true }).isVisible(), true);
   } finally {
     await context.close();
   }
 });
 
-test('改密失败路径：点击“确定”但无“修改成功” → 判定失败（PRD §31/§47）', async (t) => {
+test('改密失败路径：点「确 定」但无成功 toast → 判定失败（PRD §31/§47）', async (t) => {
   const b = requireBrowser(t);
   if (!b) return;
   const cfg = config();
   const { context, page } = await openAuthenticatedSession(b, cfg);
   try {
-    await assert.rejects(() => performReset(page, cfg, 'KY-04', 'NewPass!123'), ResetVerificationError);
-    assert.equal(await page.getByText('修改失败：该账号已被锁定', { exact: true }).isVisible(), true);
+    await assert.rejects(
+      () => performReset(page, cfg, 'ky04@highpowertech.com', 'NewPass!123'),
+      ResetVerificationError,
+    );
+    assert.equal(await page.getByText('重置失败：该账号已被锁定', { exact: true }).isVisible(), true);
   } finally {
     await context.close();
   }
@@ -150,10 +155,10 @@ test('ResetWorker 失败重试 2～3 次后返回 FAILED（PRD §48）', async (
   if (!b) return;
   const worker = new ResetWorker(config());
   try {
-    const result = await worker.processJob({ jobId: 1, accountCode: 'KY-04', newPassword: 'NewPass!123' });
+    const result = await worker.processJob({ jobId: 1, accountUsername: 'ky04@highpowertech.com', newPassword: 'NewPass!123' });
     assert.equal(result.status, 'FAILED');
     assert.equal(result.attempts, 3);
-    assert.match(result.error ?? '', /修改成功/);
+    assert.match(result.error ?? '', /重置成功/);
   } finally {
     await worker.close();
   }
@@ -164,9 +169,9 @@ test('账号不存在 → FAILED 未找到账号（PRD §47）', async (t) => {
   if (!b) return;
   const worker = new ResetWorker(config());
   try {
-    const result = await worker.processJob({ jobId: 2, accountCode: 'KY-99', newPassword: 'NewPass!123' });
+    const result = await worker.processJob({ jobId: 2, accountUsername: 'nonexist@highpowertech.com', newPassword: 'NewPass!123' });
     assert.equal(result.status, 'FAILED');
-    assert.match(result.error ?? '', /未找到账号「KY-99」/);
+    assert.match(result.error ?? '', /未找到账号「nonexist@highpowertech.com」/);
   } finally {
     await worker.close();
   }
@@ -178,8 +183,8 @@ test('ResetWorker.run 串行消费队列（PRD §28）', async (t) => {
   const worker = new ResetWorker(config());
   try {
     const results = await worker.run([
-      { jobId: 1, accountCode: 'KY-01', newPassword: 'NewPass!111' },
-      { jobId: 2, accountCode: 'KY-02', newPassword: 'NewPass!222' },
+      { jobId: 1, accountUsername: 'ky01@highpowertech.com', newPassword: 'NewPass!111' },
+      { jobId: 2, accountUsername: 'ky02@highpowertech.com', newPassword: 'NewPass!222' },
     ]);
     assert.equal(results.length, 2);
     assert.equal(results[0]?.status, 'SUCCESS');

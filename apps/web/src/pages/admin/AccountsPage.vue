@@ -78,7 +78,7 @@ const dialogMeta = computed(() => {
     return { title: `强制回收 ${account.code}`, description: '将重置密码并立即退出当前使用人的科应会话。', destructive: true, confirm: '确认回收' }
   }
   if (type === 'reset-password') {
-    return { title: '重置密码', description: '手动重置将立即踢出当前会话，并进入回收流程。请确认选中的科应账号。', destructive: false, confirm: '确认重置' }
+    return { title: '重置密码', description: '将重置所选科应账号的密码：立即踢出当前会话并回收，由系统生成新密码并在科应后台自动完成改密（静默，不发送通知）。', destructive: false, confirm: '确认重置' }
   }
   if (type === 'disable') {
     return { title: `禁用账号 ${account.code}`, description: '禁用后该账号不可再被领取；若有活动租约将一并回收。', destructive: true, confirm: '确认禁用' }
@@ -174,7 +174,7 @@ async function onFix(account) {
           v-for="account in errorAccounts"
           :key="account.id"
           :account-code="account.code"
-          error-text="错误：未找到「重置密码」按钮，请检查 Playwright Worker 与科应页面。"
+          error-text="改密失败：科应后台未能完成重置（Worker 已自动重试），可重试；若已人工处理完成请标记可用。"
           @retry="onRetry(account)"
           @fix="onFix(account)"
         />

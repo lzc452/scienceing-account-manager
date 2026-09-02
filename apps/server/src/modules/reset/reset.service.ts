@@ -1,10 +1,10 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { randomBytes } from 'node:crypto';
 import { DatabaseService } from '../../db/database.service';
 import { AuditService } from '../../db/audit.service';
 import { ACCOUNT_STATUS, AUDIT_ACTION, AUDIT_RESULT, LEASE_STATUS } from '../../db/constants';
 import { decryptSecret, encryptSecret, parsePayload, serializePayload } from '../../crypto/secret-box';
 import { loadMasterKey } from '../../crypto/master-key';
+import { generateAccountPassword } from '../../crypto/account-password';
 import { nowIso } from '../../db/config';
 import { RESET_EXECUTOR, type ResetExecutor } from '../automation/automation.types';
 import type { AccountRow } from '../leases/leases.types';
@@ -38,7 +38,7 @@ export class ResetService {
   enqueueReset(accountId: number, leaseId: number | null): number {
     const db = this.dbService.db;
     this.getAccount(accountId); // 校验账号存在
-    const newPassword = randomBytes(16).toString('base64url');
+    const newPassword = generateAccountPassword(); // 规则见 crypto/account-password.ts（集中定义）
     const pendingCiphertext = serializePayload(encryptSecret(newPassword, loadMasterKey()));
     const now = nowIso();
 
@@ -99,7 +99,7 @@ export class ResetService {
       const newPassword = this.ensurePhase1(account);
 
       try {
-        const result = await exec.execute({ jobId: job.id, accountCode: account.code, newPassword });
+        const result = await exec.execute({ jobId: job.id, accountUsername: account.username, newPassword });
         if (result.success) {
           this.completeSuccess(job.id, account.id, job.lease_id);
           succeeded += 1;
@@ -209,7 +209,7 @@ export class ResetService {
     if (account.pending_password_ciphertext) {
       return decryptSecret(parsePayload(account.pending_password_ciphertext), loadMasterKey());
     }
-    const newPassword = randomBytes(16).toString('base64url');
+    const newPassword = generateAccountPassword(); // 规则见 crypto/account-password.ts（集中定义）
     const pendingCiphertext = serializePayload(encryptSecret(newPassword, loadMasterKey()));
     this.dbService.db
       .prepare("UPDATE scienceing_accounts SET pending_password_ciphertext = ?, status = ?, updated_at = ? WHERE id = ?")

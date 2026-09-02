@@ -2,7 +2,11 @@
 
 export interface ResetJobInput {
   jobId: number;
-  accountCode: string;
+  /**
+   * 目标科应共享账号的 username（不是 code）—— Worker 用它在科应后台
+   * `/account/management/list` 页面定位对应行（td[title=username]）。
+   */
+  accountUsername: string;
   /** 后端解密的 pending 明文密码（Phase 1 生成） */
   newPassword: string;
 }

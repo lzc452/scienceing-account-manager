@@ -7,6 +7,8 @@ export interface HealthCheckResult {
   adminLoginOk: boolean;
   accountPageOk: boolean;
   resetEntryOk: boolean;
+  /** 失败原因（如缺少 Worker 环境变量 / 科应页面改版），供设置页展示。 */
+  error?: string | null;
   checkedAt: string;
 }
 
@@ -41,6 +43,7 @@ export class AutomationService {
       adminLoginOk: detail.adminLoginOk,
       accountPageOk: detail.accountPageOk,
       resetEntryOk: detail.resetEntryOk,
+      error: detail.error ?? null,
       checkedAt: nowIso(),
     };
     this.dbService.db

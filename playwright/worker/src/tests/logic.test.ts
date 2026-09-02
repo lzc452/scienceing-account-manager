@@ -110,25 +110,36 @@ test('runQueueSerial 串行消费：任意时刻仅一个任务在执行（PRD �
   assert.equal(maxActive, 1);
 });
 
-test('错误消息清晰可读（PRD §47 示例：未找到“重置密码”按钮 / 账号找不到）', () => {
-  assert.match(new AccountNotFoundError('KY-03').message, /未找到账号「KY-03」/);
-  assert.match(new ResetVerificationError('KY-03', '修改成功').message, /未出现成功文案「修改成功」/);
+test('错误消息清晰可读（PRD §47 示例：未找到「重置密码」按钮 / 账号找不到）', () => {
+  assert.match(new AccountNotFoundError('ky03@highpowertech.com').message, /未找到账号「ky03@highpowertech.com」/);
+  assert.match(new ResetVerificationError('ky03@highpowertech.com', '重置成功').message, /未出现成功文案「重置成功」/);
 });
 
-test('mock 科应后台包含语义定位所需可访问元素（PRD §27 getByRole/getByLabel/getByText）', () => {
+test('mock 科应后台包含真实页面定位所需的稳定锚点（id/placeholder/iconfont/antd class/toast）', () => {
   const html = fs.readFileSync(mockHtmlPath(), 'utf8');
-  // getByLabel：用户名 / 密码 / 新密码
-  assert.match(html, /<label>用户名/);
-  assert.match(html, /<label>密码/);
-  assert.match(html, /<label>新密码/);
-  // getByRole button：登录 / 重置密码 / 保存 / 确定
-  assert.match(html, />登录</);
-  assert.match(html, />重置密码</);
-  assert.match(html, />保存</);
-  assert.match(html, />确定</);
-  // getByRole heading：账号管理
-  assert.match(html, /<h1>账号管理<\/h1>/);
-  // PRD §31 成功/失败文案
-  assert.match(html, /修改成功/);
-  assert.match(html, /修改失败/);
+  // 登录页：form id + 用户名/密码输入框容器 id + placeholder + 协议
+  assert.match(html, /id="login-form"/);
+  assert.match(html, /id="login-form_username"/);
+  assert.match(html, /id="login-form_password"/);
+  assert.match(html, /placeholder="请输入用户名"/);
+  assert.match(html, /placeholder="输入密码"/);
+  assert.match(html, /type="submit"/);
+  assert.match(html, /我已阅读并同意/);
+  // 账号管理：CSS Modules 前缀（生产随机后缀） + td[title=账号] + iconfont 重置图标
+  assert.match(html, /account_userlist_filters__/);
+  assert.match(html, /account_userlist_buttons__/);
+  assert.match(html, /account_userlist_table__/);
+  assert.match(html, /account_userlist_action__/);
+  assert.match(html, /account_userlist_notificationItem__/);
+  assert.match(html, /td title="ky01@highpowertech.com"/);
+  assert.match(html, /icon-zhongzhimima/);
+  // AntD 弹窗：title / radio 指定密码 / 新密码 placeholder / 通知设置（真实文案：指定密码/邮箱通知）
+  assert.match(html, /ant-modal-title/);
+  assert.match(html, /指定密码/);
+  assert.match(html, /placeholder="请输入指定密码"/);
+  assert.match(html, /邮箱通知/);
+  assert.match(html, /短信通知/);
+  // PRD §31 成功/失败 toast 文案（真实科应：重置成功）
+  assert.match(html, /重置成功/);
+  assert.match(html, /重置失败/);
 });

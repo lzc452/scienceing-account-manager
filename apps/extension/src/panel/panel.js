@@ -198,7 +198,7 @@
       // ① 正常 / ② 警告 / ③ 临界：活性态，环色按剩余时间
       const remaining = remainingSeconds();
       const c = ringColors(remaining);
-      ringHtml = ringSvg(ringPath(ringRatio(remaining)), c.ring, '释放时间', c.label);
+      ringHtml = ringSvg(ringPath(ringRatio(remaining)), c.ring, '释放', c.label);
     }
 
     const isActive = state === 'normal' || state === 'warning' || state === 'critical';

@@ -173,6 +173,11 @@ function formatDate(iso) {
             </div>
           </div>
 
+          <!-- 失败原因（如缺少 Worker 环境变量 / 科应页面改版） -->
+          <p v-if="!healthOk && health.error" class="mt-3 text-xs leading-relaxed text-ember">
+            {{ health.error }}
+          </p>
+
           <div class="mt-4 flex items-center justify-between border-t border-hairline pt-4">
             <Badge :tone="healthOk ? 'available' : 'error'">{{ healthOk ? '正常' : '异常' }}</Badge>
             <p class="text-xs tabular-nums text-mid-gray">最后检测：{{ formatDate(health.lastCheckedAt) }}</p>

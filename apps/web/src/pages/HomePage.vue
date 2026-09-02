@@ -186,10 +186,29 @@ async function act(card, fn, okMsg) {
 }
 
 const onForceRelease = (c) => act(c, forceRelease, '已强制回收')
-const onReset = (c) => act(c, resetPassword, '已发起重置密码')
 const onMarkAvailable = (c) => act(c, markAvailable, '已标记为可用')
 const onDisable = (c) => act(c, disableAccount, '已禁用')
 const onEnable = (c) => act(c, enableAccount, '已启用')
+
+// 重置密码（二次确认，避免误触：将立即踢出当前会话并回收，新密码由系统托管）
+const resetOpen = ref(false)
+const resetTarget = ref(null)
+function onReset(card) {
+  resetTarget.value = card
+  resetOpen.value = true
+}
+async function doReset() {
+  const card = resetTarget.value
+  if (card?.id == null) return
+  try {
+    await resetPassword(card.id)
+    toast({ title: `已发起重置 ${card.code}`, description: '系统将自动完成科应改密，账号回到可用后可被领取', variant: 'success' })
+    resetOpen.value = false
+    await load()
+  } catch (e) {
+    toast({ title: e?.message || '操作失败', variant: 'destructive' })
+  }
+}
 
 // 新增 / 编辑
 const createOpen = ref(false)
@@ -311,7 +330,7 @@ async function confirmImport() {
       页面栈：统一垂直留白节奏（gap-6），由 .app-main 负责内容稀少时垂直居中。
       不再自带 max-w/px/py —— 这些交给 .page-container，保证大屏居中、小屏不贴边。
     -->
-    <div class="flex flex-col gap-4">
+    <div class="flex flex-col gap-4 py-4 sm:py-5">
       <!--
         统计概览：四项指标收进一张卡片，用 1px gap 的 hairline 网格做分隔
         （卡片底 = hairline，单元格底 = paper，缝隙即分割线），
@@ -340,7 +359,7 @@ async function confirmImport() {
         </div>
 
         <div v-else class="grid grid-cols-2 gap-px bg-hairline sm:grid-cols-4">
-          <div class="bg-paper p-2 sm:p-2">
+          <div class="bg-paper p-4 sm:p-5">
             <StatBlock label="可用" :value="availability.available" dot="#16a34a" />
           </div>
           <div class="bg-paper p-4 sm:p-5">
@@ -358,7 +377,7 @@ async function confirmImport() {
       <!-- 账号池 -->
       <Card>
         <!-- 卡头：底部 hairline 与卡体分隔，形成清晰的头部带 -->
-        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-hairline p-2 sm:px-4">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-hairline p-2 sm:p-4">
           <h2 class="text-base font-semibold leading-6 text-ink">账号池</h2>
           <div class="flex flex-wrap items-center gap-2">
             <template v-if="isAdmin">
@@ -415,7 +434,7 @@ async function confirmImport() {
                       <div class="truncate text-sm font-semibold text-ink">{{ card.code }}</div>
                       <div v-if="isAdmin && card.username" class="truncate text-xs text-mid-gray">{{ card.username }}</div>
                     </div>
-                    <StatusDot :status="card.status" />
+                    <StatusDot :status="card.status" :label="card.enabled ? '' : '已禁用'" />
                   </div>
                 </div>
 
@@ -427,19 +446,20 @@ async function confirmImport() {
                   </template>
                   <template v-else-if="card.status === 'recycling'">回收中…</template>
                   <template v-else-if="card.status === 'error'"><span class="text-ember">需人工处理</span></template>
+                  <template v-else-if="!card.enabled"><span class="text-ember">已禁用</span></template>
                   <template v-else-if="card.status === 'available'">可领取</template>
                   <template v-else>已释放</template>
                 </div>
 
                 <!-- 管理员动作 -->
                 <div v-if="isAdmin" class="mt-3 flex flex-wrap gap-1.5">
-                  <Button v-if="card.status === 'in_use'" size="sm" variant="outline" @click="onForceRelease(card)">强制回收</Button>
-                  <Button v-if="card.status === 'error'" size="sm" variant="outline" @click="onMarkAvailable(card)">标记可用</Button>
-                  <Button size="sm" variant="outline" @click="onReset(card)">重置密码</Button>
-                  <Button size="sm" variant="outline" @click="openEdit(card)">编辑</Button>
+                  <Button v-if="card.status === 'in_use' && card.enabled" size="sm" variant="outline" @click="onForceRelease(card)">强制回收</Button>
+                  <Button v-if="card.status === 'error' && card.enabled" size="sm" variant="outline" @click="onMarkAvailable(card)">标记可用</Button>
+                  <Button v-if="card.enabled" size="sm" variant="outline" @click="onReset(card)">重置密码</Button>
+                  <Button v-if="card.enabled" size="sm" variant="outline" @click="openEdit(card)">编辑</Button>
                   <Button v-if="card.enabled" size="sm" variant="outline" @click="onDisable(card)">禁用</Button>
                   <Button v-else size="sm" variant="outline" @click="onEnable(card)">启用</Button>
-                  <Button size="sm" variant="outline" class="text-ember" @click="confirmDelete(card)">删除</Button>
+                  <Button v-if="card.enabled" size="sm" variant="outline" class="text-ember" @click="confirmDelete(card)">删除</Button>
                 </div>
               </div>
             </div>
@@ -460,6 +480,19 @@ async function confirmImport() {
         </div>
       </Card>
     </div>
+
+    <!-- 重置密码确认 -->
+    <Dialog
+      :open="resetOpen"
+      title="重置密码"
+      :description="`将重置「${resetTarget?.code ?? ''}${resetTarget?.username ? `（${resetTarget.username}）` : ''}」的科应密码并回收其活动租约：立即踢出当前会话，由系统生成新密码并自动在科应后台完成改密，之后账号回到可用。确认继续？`"
+      @update:open="(v) => (resetOpen = v)"
+    >
+      <template #footer>
+        <Button variant="outline" @click="resetOpen = false">取消</Button>
+        <Button @click="doReset">确认重置</Button>
+      </template>
+    </Dialog>
 
     <!-- 新增账号 -->
     <Dialog :open="createOpen" title="新增科应账号" @update:open="(v) => (createOpen = v)">

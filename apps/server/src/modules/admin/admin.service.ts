@@ -1,11 +1,11 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { randomBytes } from 'node:crypto';
 import { DatabaseService } from '../../db/database.service';
 import { AuditService } from '../../db/audit.service';
 import { ACCOUNT_STATUS, AUDIT_ACTION, AUDIT_RESULT, LEASE_STATUS, RELEASE_REASON } from '../../db/constants';
 import { AutomationService } from '../automation/automation.service';
 import { encryptSecret, serializePayload } from '../../crypto/secret-box';
 import { loadMasterKey } from '../../crypto/master-key';
+import { generateAccountPassword } from '../../crypto/account-password';
 import { nowIso } from '../../db/config';
 import { SEED_PLACEHOLDER_PASSWORD } from '../../db/seed';
 import type { AccountRow } from '../leases/leases.types';
@@ -67,10 +67,15 @@ export class AdminService {
    * 自动化健康检查（PRD §49）：委托 AutomationService 执行 Playwright Worker
    * 三项检查（管理员登录 / 账号管理页 / 改密入口），映射为前端渲染结构。
    */
-  async healthCheck(): Promise<{ lastCheckedAt: string | null; items: Array<{ key: string; label: string; ok: boolean }> }> {
+  async healthCheck(): Promise<{
+    lastCheckedAt: string | null;
+    error?: string | null;
+    items: Array<{ key: string; label: string; ok: boolean }>;
+  }> {
     const result = await this.automation.checkHealth();
     return {
       lastCheckedAt: result.checkedAt,
+      error: result.error ?? null,
       items: [
         { key: 'admin-login', label: '管理员登录正常', ok: result.adminLoginOk },
         { key: 'accounts-page', label: '账号管理页可访问', ok: result.accountPageOk },
@@ -351,8 +356,9 @@ export class AdminService {
 
   /**
    * 删除科应账号（PRD §37 管理动作，不可逆）。
-   * 有活动租约时禁止删除（应先回收）；否则级联删除其 leases / reset_jobs / audit_logs
-   * 后删除账号行（account_id 为 NOT NULL，无法置空保留，故整体清除）。
+   * 有活动租约时禁止删除（应先回收）；否则按子表→父表顺序级联删除其
+   * reset_jobs / audit_logs / leases 后删除账号行。删除动作本身产生的审计记录
+   * 因账号行已不存在，account_id 置 NULL，原账号 ID 存于 metadata 追溯。
    */
   deleteAccount(accountId: number, adminUser: AuthUser): { accountId: number } {
     const account = this.getAccount(accountId);
@@ -367,9 +373,11 @@ export class AdminService {
 
     db.exec('BEGIN IMMEDIATE');
     try {
-      db.prepare('DELETE FROM leases WHERE account_id = ?').run(accountId);
+      // 子表先删、父表后删：reset_jobs / audit_logs 的 lease_id 都引用 leases(id)，
+      // 必须先删它们再删 leases，否则历史 reset_job/audit 行会触发外键失败。
       db.prepare('DELETE FROM reset_jobs WHERE account_id = ?').run(accountId);
       db.prepare('DELETE FROM audit_logs WHERE account_id = ?').run(accountId);
+      db.prepare('DELETE FROM leases WHERE account_id = ?').run(accountId);
       db.prepare('DELETE FROM scienceing_accounts WHERE id = ?').run(accountId);
       db.exec('COMMIT');
     } catch (err) {
@@ -381,12 +389,14 @@ export class AdminService {
       throw err;
     }
 
+    // 账号行此时已删除，audit_logs.account_id 若再引用它会违反外键约束，
+    // 故 accountId 传 null，原账号 ID 保留在 metadata 中供审计追溯。
     this.audit.record({
       action: AUDIT_ACTION.ACCOUNT_DELETE,
       result: AUDIT_RESULT.SUCCESS,
       userId: adminUser.id,
-      accountId,
-      metadata: { accountCode: account.code, username: account.username },
+      accountId: null,
+      metadata: { accountId, accountCode: account.code, username: account.username },
     });
     return { accountId };
   }
@@ -419,7 +429,7 @@ export class AdminService {
   /** 生成 pending 密码（AES 加密）→ account RECYCLING → 回收活动租约 → 创建 reset_job。 */
   private enqueueReset(account: AccountRow, adminUser: AuthUser, auditAction: string): void {
     const db = this.dbService.db;
-    const newPassword = randomBytes(16).toString('base64url');
+    const newPassword = generateAccountPassword(); // 规则见 crypto/account-password.ts（集中定义）
     const pendingCiphertext = serializePayload(encryptSecret(newPassword, loadMasterKey()));
     const now = nowIso();
     let leaseId: number | null = null;

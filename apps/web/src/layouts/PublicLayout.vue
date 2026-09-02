@@ -103,7 +103,7 @@ function confirmLogout() {
     </header>
 
     <!-- 内容承载区：统一留白节奏 + 内容少时垂直居中 -->
-    <main class="app-main">
+    <main class="app-main bg-white">
       <div :class="['page-container', contentWidth === 'narrow' && 'page-container-narrow']">
         <slot />
       </div>

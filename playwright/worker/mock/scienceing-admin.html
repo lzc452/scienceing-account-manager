@@ -3,145 +3,295 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>科应管理后台（Mock）</title>
+  <title>科应管理后台（Mock，贴近真实 DOM 结构）</title>
   <style>
     :root { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #1f2937; }
     body { max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
     [hidden] { display: none !important; }
     h1 { font-size: 1.5rem; }
-    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
-    th, td { border: 1px solid #d1d5db; padding: 0.5rem 0.75rem; text-align: left; }
-    th { background: #f3f4f6; }
-    form#loginForm { display: grid; gap: 0.75rem; max-width: 20rem; }
-    label { display: grid; gap: 0.25rem; font-size: 0.9rem; }
-    input { padding: 0.4rem 0.5rem; }
-    button { padding: 0.4rem 0.9rem; cursor: pointer; }
-    dialog { border: 1px solid #d1d5db; border-radius: 6px; padding: 1rem; width: 20rem; }
-    #toast { margin-top: 1rem; padding: 0.5rem 0.75rem; border: 1px solid; border-radius: 6px; }
-    #toast.success { color: #16a34a; border-color: #16a34a; }
-    #toast.error { color: #e7000b; border-color: #e7000b; }
+    input { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; }
+    button { padding: 0.4rem 1rem; cursor: pointer; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; }
+    button.primary { background: #1677ff; border-color: #1677ff; color: #fff; }
+    /* 登录表单：仿真实科应（div 包裹 label 文本 + input） */
+    #login-form { display: grid; gap: 0.9rem; max-width: 22rem; }
+    #login-form .field-label { font-size: 0.85rem; color: #6b7280; margin-bottom: 0.2rem; }
+    #login-form .field { display: grid; }
+    #login-form input[type="text"], #login-form input[type="password"] { width: 100%; box-sizing: border-box; }
+    .agree-row { display: flex; gap: 0.4rem; align-items: flex-start; font-size: 0.85rem; color: #4b5563; }
+    .agree-row .text-blue { color: #1677ff; }
+    .login-error { color: #e7000b; font-size: 0.85rem; }
+    /* 账号管理页：CSS Modules 风格（class 带随机后缀，定位用前缀） */
+    .account_userlist_filters__MOCK { display: flex; gap: 1rem; align-items: flex-end; margin-bottom: 1rem; flex-wrap: wrap; }
+    .account_userlist_filterItem__MOCK { display: grid; gap: 0.25rem; }
+    .account_userlist_label__MOCK { font-size: 0.85rem; color: #374151; }
+    .account_userlist_buttons__MOCK { display: flex; gap: 0.5rem; }
+    .account_userlist_table__MOCK { overflow: hidden; border: 1px solid #e5e7eb; border-radius: 8px; }
+    .account_userlist_table__MOCK table { border-collapse: collapse; width: 100%; }
+    .account_userlist_table__MOCK th, .account_userlist_table__MOCK td { border-bottom: 1px solid #f0f0f0; padding: 0.55rem 0.75rem; text-align: left; font-size: 0.9rem; }
+    .account_userlist_table__MOCK th { background: #fafafa; font-weight: 500; }
+    .account_userlist_action__MOCK { text-align: center; }
+    .iconfont { font-style: normal; cursor: pointer; color: #1677ff; font-size: 1rem; user-select: none; }
+    /* AntD 风格弹窗与 message */
+    .ant-modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 1000; }
+    .ant-modal-wrap { position: fixed; inset: 0; z-index: 1001; display: flex; align-items: center; justify-content: center; }
+    .ant-modal { width: 26rem; background: #fff; border-radius: 8px; box-shadow: 0 6px 16px rgba(0,0,0,.15); }
+    .ant-modal-header { padding: 1rem 1.5rem 0; }
+    .ant-modal-title { font-weight: 600; }
+    .ant-modal-body { padding: 1rem 1.5rem 1.25rem; display: grid; gap: 0.7rem; font-size: 0.9rem; }
+    .ant-modal-footer { padding: 0.5rem 1.5rem 1.25rem; text-align: right; display: flex; gap: 0.5rem; justify-content: flex-end; }
+    .ant-radio-wrapper, .ant-checkbox-wrapper { display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; margin-right: 1rem; }
+    .ant-radio, .ant-checkbox { position: relative; width: 14px; height: 14px; display: inline-block; }
+    .ant-radio input, .ant-checkbox input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+    .ant-radio-inner, .ant-checkbox-inner { position: absolute; inset: 0; border: 1px solid #d9d9d9; border-radius: 50%; background: #fff; }
+    .ant-radio-checked .ant-radio-inner { border-color: #1677ff; }
+    .ant-radio-checked .ant-radio-inner::after { content: ""; position: absolute; inset: 3px; background: #1677ff; border-radius: 50%; }
+    .ant-checkbox-inner { border-radius: 2px; }
+    .ant-checkbox-checked .ant-checkbox-inner { background: #1677ff; border-color: #1677ff; }
+    .ant-checkbox-checked .ant-checkbox-inner::after { content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+    .section-title { font-size: 0.9rem; font-weight: 600; margin: 0.25rem 0; }
+    .ant-message { position: fixed; top: 16px; left: 0; right: 0; z-index: 2000; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
+    .ant-message-notice { background: #fff; padding: 0.5rem 1rem; border-radius: 6px; box-shadow: 0 3px 12px rgba(0,0,0,.12); font-size: 0.9rem; }
+    .ant-message-notice.success { color: #16a34a; border: 1px solid #16a34a; }
+    .ant-message-notice.error { color: #e7000b; border: 1px solid #e7000b; }
   </style>
 </head>
 <body>
-  <!-- 登录视图 -->
+  <!-- ============ 登录视图（真实科应：/user/login） ============ -->
   <section id="loginView">
     <h1>科应管理后台</h1>
-    <form id="loginForm">
-      <label>用户名<input name="username" autocomplete="username" /></label>
-      <label>密码<input name="password" type="password" autocomplete="current-password" /></label>
-      <button type="submit">登录</button>
-      <p id="loginError" role="alert" class="error" hidden></p>
+    <form id="login-form">
+      <div class="field" id="login-form_username">
+        <div class="field-label">用户名</div>
+        <input type="text" placeholder="请输入用户名" name="username" autocomplete="username" />
+      </div>
+      <div class="field" id="login-form_password">
+        <div class="field-label">密码</div>
+        <span><input type="password" placeholder="输入密码" name="password" autocomplete="current-password" /></span>
+      </div>
+      <div class="agree-row">
+        <span><input type="checkbox" id="agree" /></span>
+        <span>我已阅读并同意 <span class="text-blue">隐私协议</span> 和 <span class="text-blue">服务条款</span></span>
+      </div>
+      <div>
+        <button type="submit" class="primary"><span>登录</span></button>
+      </div>
+      <p id="loginError" class="login-error" hidden>用户名或密码错误</p>
     </form>
-    <p>Mock 管理员账号：admin / admin123</p>
+    <p style="font-size: 0.8rem; color: #9ca3af;">Mock 管理员账号：admin / admin123（需勾选协议）；登录成功跳 /search（模拟真实跳转）</p>
   </section>
 
-  <!-- 账号管理视图 -->
+  <!-- ============ 账号管理视图（真实科应：/account/management/list） ============ -->
   <section id="adminView" hidden>
-    <h1>账号管理</h1>
-    <table>
-      <thead>
-        <tr><th scope="col">账号</th><th scope="col">状态</th><th scope="col">操作</th></tr>
-      </thead>
-      <tbody>
-        <tr data-account="KY-01"><td>KY-01</td><td>正常</td><td><button type="button" data-reset="KY-01">重置密码</button></td></tr>
-        <tr data-account="KY-02"><td>KY-02</td><td>正常</td><td><button type="button" data-reset="KY-02">重置密码</button></td></tr>
-        <tr data-account="KY-03"><td>KY-03</td><td>正常</td><td><button type="button" data-reset="KY-03">重置密码</button></td></tr>
-        <tr data-account="KY-04"><td>KY-04</td><td>锁定</td><td><button type="button" data-reset="KY-04">重置密码</button></td></tr>
-        <tr data-account="KY-05"><td>KY-05</td><td>正常</td><td><button type="button" data-reset="KY-05">重置密码</button></td></tr>
-      </tbody>
-    </table>
+    <h1>管理员账号</h1>
 
-    <button type="button" id="logoutBtn">退出登录</button>
+    <!-- 筛选组件（CSS Modules 前缀 account_userlist_*） -->
+    <div class="account_userlist_filters__MOCK">
+      <div class="account_userlist_filterItem__MOCK">
+        <div class="account_userlist_filterBox__MOCK">
+          <span class="account_userlist_label__MOCK">用户名</span>
+          <input type="text" id="searchInput" placeholder="请输入用户名" />
+        </div>
+      </div>
+      <div class="account_userlist_buttons__MOCK">
+        <button type="button" id="searchBtn">查 询</button>
+        <button type="button" id="resetBtn">重 置</button>
+      </div>
+    </div>
 
-    <!-- 改密结果 toast（页面级，独立于对话框，PRD §31 校验对象） -->
-    <p id="toast" role="status" hidden></p>
-
-    <!-- 重置密码对话框 -->
-    <dialog id="resetDialog">
-      <form method="dialog">
-        <h2>重置密码</h2>
-        <p>正在为账号 <strong id="dialogAccount"></strong> 设置新密码</p>
-        <label>新密码<input name="newPassword" autocomplete="new-password" /></label>
-        <button type="button" id="saveBtn">保存</button>
-        <button type="button" id="confirmBtn" hidden>确定</button>
-      </form>
-    </dialog>
+    <!-- 表格组件（td[title=账号]，行内末列操作区 iconfont 重置图标） -->
+    <div class="account_userlist_table__MOCK">
+      <table>
+        <thead>
+          <tr><th>科应账号</th><th>状态</th><th>操作</th></tr>
+        </thead>
+        <tbody id="rows">
+          <tr data-code="ky01@highpowertech.com"><td title="ky01@highpowertech.com">ky01@highpowertech.com</td><td>正常</td><td class="account_userlist_action__MOCK"><i class="iconfont icon-zhongzhimima" data-reset="ky01@highpowertech.com" title="重置密码" role="button">&#8635;</i></td></tr>
+          <tr data-code="ky02@highpowertech.com"><td title="ky02@highpowertech.com">ky02@highpowertech.com</td><td>正常</td><td class="account_userlist_action__MOCK"><i class="iconfont icon-zhongzhimima" data-reset="ky02@highpowertech.com" title="重置密码" role="button">&#8635;</i></td></tr>
+          <tr data-code="ky03@highpowertech.com"><td title="ky03@highpowertech.com">ky03@highpowertech.com</td><td>正常</td><td class="account_userlist_action__MOCK"><i class="iconfont icon-zhongzhimima" data-reset="ky03@highpowertech.com" title="重置密码" role="button">&#8635;</i></td></tr>
+          <tr data-code="ky04@highpowertech.com"><td title="ky04@highpowertech.com">ky04@highpowertech.com</td><td>锁定</td><td class="account_userlist_action__MOCK"><i class="iconfont icon-zhongzhimima" data-reset="ky04@highpowertech.com" title="重置密码" role="button">&#8635;</i></td></tr>
+          <tr data-code="ky05@highpowertech.com"><td title="ky05@highpowertech.com">ky05@highpowertech.com</td><td>正常</td><td class="account_userlist_action__MOCK"><i class="iconfont icon-zhongzhimima" data-reset="ky05@highpowertech.com" title="重置密码" role="button">&#8635;</i></td></tr>
+        </tbody>
+      </table>
+    </div>
   </section>
+
+  <!-- ============ AntD 风格重置密码弹窗 ============ -->
+  <div id="modalRoot" hidden>
+    <div class="ant-modal-mask"></div>
+    <div class="ant-modal-wrap">
+      <div class="ant-modal" role="dialog" aria-modal="true">
+        <div class="ant-modal-content">
+        <div class="ant-modal-header">
+          <div class="ant-modal-title">重置密码-<span id="modalAccount"></span></div>
+        </div>
+        <div class="ant-modal-body">
+          <div>
+            <div class="section-title">密码重置方式</div>
+            <label class="ant-radio-wrapper">
+              <span class="ant-radio ant-radio-checked"><input type="radio" name="pwdMode" value="random" checked /></span>
+              <span>随机密码</span>
+            </label>
+            <label class="ant-radio-wrapper">
+              <span class="ant-radio"><input type="radio" name="pwdMode" value="specified" /></span>
+              <span>指定密码</span>
+            </label>
+          </div>
+          <div id="customPwdRow" hidden>
+            <label class="field-label" style="display:grid; gap:0.25rem;">新密码
+              <input id="newPwd" type="password" placeholder="请输入指定密码" autocomplete="new-password" />
+            </label>
+          </div>
+          <div>
+            <div class="section-title">通知设置</div>
+            <div class="account_userlist_notificationItem__MOCK">
+              <label class="ant-checkbox-wrapper">
+                <span class="ant-checkbox ant-checkbox-checked"><input type="checkbox" name="notify" checked /></span>
+                <span>邮箱通知（mock@highpowertech.com）</span>
+              </label>
+            </div>
+            <div class="account_userlist_notificationItem__MOCK">
+              <label class="ant-checkbox-wrapper">
+                <span class="ant-checkbox ant-checkbox-checked"><input type="checkbox" name="notify" checked /></span>
+                <span>短信通知（188****0000）</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="ant-modal-footer">
+          <button type="button" id="cancelBtn">取 消</button>
+          <button type="button" id="confirmBtn" class="primary">确 定</button>
+        </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AntD message（toast） -->
+  <div class="ant-message" id="messageRoot" hidden></div>
 
   <script>
     (function () {
       var SESSION_KEY = 'mock_admin_session';
       var MOCK_ADMIN = { username: 'admin', password: 'admin123' };
       // KY-04 模拟“改密失败”（例如账号被锁定），用于验证失败路径（PRD §47/§48）。
-      var FAIL_ACCOUNT = 'KY-04';
+      var FAIL_ACCOUNT = 'ky04@highpowertech.com';
       var currentAccount = null;
 
       var loginView = document.getElementById('loginView');
       var adminView = document.getElementById('adminView');
-      var loginForm = document.getElementById('loginForm');
+      var loginForm = document.getElementById('login-form');
       var loginError = document.getElementById('loginError');
-      var resetDialog = document.getElementById('resetDialog');
-      var dialogAccount = document.getElementById('dialogAccount');
-      var newPasswordInput = document.querySelector('[name="newPassword"]');
-      var toast = document.getElementById('toast');
-      var saveBtn = document.getElementById('saveBtn');
-      var confirmBtn = document.getElementById('confirmBtn');
+      var modalRoot = document.getElementById('modalRoot');
+      var modalAccount = document.getElementById('modalAccount');
+      var customPwdRow = document.getElementById('customPwdRow');
+      var newPwd = document.getElementById('newPwd');
+      var rows = document.getElementById('rows');
 
       function showAdmin() { loginView.hidden = true; adminView.hidden = false; }
       function showLogin() { adminView.hidden = true; loginView.hidden = false; }
 
+      // 会话存在 → 直接进入账号管理（真实科应：storageState 复用后直达管理页）
       if (localStorage.getItem(SESSION_KEY) === '1') showAdmin(); else showLogin();
 
+      // ---- 登录：协议勾选 + 提交（真实科应登录成功跳 /search） ----
       loginForm.addEventListener('submit', function (ev) {
         ev.preventDefault();
         var u = loginForm.elements.username.value;
         var p = loginForm.elements.password.value;
-        if (u === MOCK_ADMIN.username && p === MOCK_ADMIN.password) {
+        var agree = document.getElementById('agree').checked;
+        if (u === MOCK_ADMIN.username && p === MOCK_ADMIN.password && agree) {
           localStorage.setItem(SESSION_KEY, '1');
-          loginError.hidden = true;
-          showAdmin();
+          // 模拟真实科应：登录成功后跳转 /search（服务端对任意路径都返回本页，刷新后凭会话进入管理页）
+          location.href = '/search';
         } else {
-          loginError.textContent = '用户名或密码错误';
+          loginError.textContent = agree ? '用户名或密码错误' : '请先勾选同意协议';
           loginError.hidden = false;
         }
       });
 
-      document.getElementById('logoutBtn').addEventListener('click', function () {
-        localStorage.removeItem(SESSION_KEY);
-        resetDialog.close();
-        toast.hidden = true;
-        showLogin();
+      // ---- 账号管理：搜索（查 询）/ 重置筛选 ----
+      document.getElementById('searchBtn').addEventListener('click', function () {
+        var q = document.getElementById('searchInput').value.trim();
+        Array.prototype.forEach.call(rows.querySelectorAll('tr'), function (tr) {
+          var code = tr.getAttribute('data-code') || '';
+          tr.style.display = q && code.indexOf(q) === -1 ? 'none' : '';
+        });
+      });
+      document.getElementById('resetBtn').addEventListener('click', function () {
+        document.getElementById('searchInput').value = '';
+        Array.prototype.forEach.call(rows.querySelectorAll('tr'), function (tr) { tr.style.display = ''; });
       });
 
-      Array.prototype.forEach.call(document.querySelectorAll('[data-reset]'), function (btn) {
-        btn.addEventListener('click', function () {
-          currentAccount = btn.getAttribute('data-reset');
-          dialogAccount.textContent = currentAccount;
-          newPasswordInput.value = '';
-          toast.hidden = true;
-          saveBtn.hidden = false;
-          confirmBtn.hidden = true;
-          resetDialog.showModal();
+      // ---- 重置弹窗：打开 ----
+      Array.prototype.forEach.call(document.querySelectorAll('[data-reset]'), function (icon) {
+        icon.addEventListener('click', function () {
+          currentAccount = icon.getAttribute('data-reset');
+          modalAccount.textContent = currentAccount;
+          newPwd.value = '';
+          // 默认随机密码；切回指定密码需重置
+          document.querySelector('input[name="pwdMode"][value="random"]').checked = true;
+          document.querySelector('input[name="pwdMode"][value="specified"]').checked = false;
+          document.querySelectorAll('.ant-radio').forEach(function (el) { el.classList.remove('ant-radio-checked'); });
+          document.querySelector('input[name="pwdMode"][value="random"]').closest('.ant-radio').classList.add('ant-radio-checked');
+          customPwdRow.hidden = true;
+          // 通知默认勾选（真实科应默认 checked，静默重置需取消）
+          Array.prototype.forEach.call(document.querySelectorAll('.account_userlist_notificationItem__MOCK input[type="checkbox"]'), function (cb) {
+            cb.checked = true;
+            cb.closest('.ant-checkbox').classList.add('ant-checkbox-checked');
+          });
+          clearToast();
+          modalRoot.hidden = false;
         });
       });
 
-      // 保存：记录新密码并展示“确定”确认按钮（PRD §31：点“确定”≠成功）。
-      saveBtn.addEventListener('click', function () {
-        confirmBtn.hidden = false;
+      // ---- 密码方式 radio（点击 wrapper 由 label 转发到原生 radio，change 驱动 UI） ----
+      Array.prototype.forEach.call(document.querySelectorAll('input[name="pwdMode"]'), function (radio) {
+        radio.addEventListener('change', function () {
+          document.querySelectorAll('.ant-radio').forEach(function (el) { el.classList.remove('ant-radio-checked'); });
+          radio.closest('.ant-radio').classList.add('ant-radio-checked');
+          customPwdRow.hidden = radio.value !== 'specified';
+        });
       });
 
-      // 确定：真正提交改密，并在页面级 toast 上给出结果（PRD §31 校验“修改成功”）。
-      confirmBtn.addEventListener('click', function () {
-        resetDialog.close();
-        if (currentAccount === FAIL_ACCOUNT) {
-          toast.textContent = '修改失败：该账号已被锁定';
-          toast.className = 'error';
-        } else {
-          toast.textContent = '修改成功';
-          toast.className = 'success';
-        }
-        toast.hidden = false;
+      // ---- 通知 checkbox（change 驱动视觉勾选态） ----
+      Array.prototype.forEach.call(document.querySelectorAll('.account_userlist_notificationItem__MOCK input[type="checkbox"]'), function (cb) {
+        cb.addEventListener('change', function () {
+          var inner = cb.closest('.ant-checkbox');
+          if (cb.checked) inner.classList.add('ant-checkbox-checked'); else inner.classList.remove('ant-checkbox-checked');
+        });
       });
+
+      // ---- 弹窗 footer：取 消 / 确 定 ----
+      document.getElementById('cancelBtn').addEventListener('click', function () { modalRoot.hidden = true; });
+      document.getElementById('confirmBtn').addEventListener('click', function () {
+        var mode = document.querySelector('input[name="pwdMode"]:checked');
+        if (mode && mode.value === 'specified' && !newPwd.value.trim()) {
+          showToast('请输入新密码', 'error');
+          return;
+        }
+        modalRoot.hidden = true;
+        if (currentAccount === FAIL_ACCOUNT) {
+          showToast('重置失败：该账号已被锁定', 'error');
+        } else {
+          showToast('重置成功', 'success');
+        }
+      });
+
+      // ---- toast ----
+      function showToast(text, kind) {
+        var root = document.getElementById('messageRoot');
+        root.hidden = false;
+        var notice = document.createElement('div');
+        notice.className = 'ant-message-notice ' + (kind || '');
+        notice.textContent = text;
+        root.appendChild(notice);
+        setTimeout(function () { notice.remove(); if (!root.children.length) root.hidden = true; }, 8000);
+      }
+      function clearToast() {
+        var root = document.getElementById('messageRoot');
+        root.innerHTML = '';
+        root.hidden = true;
+      }
     })();
   </script>
 </body>

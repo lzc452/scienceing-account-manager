@@ -30,7 +30,7 @@ export class PlaywrightResetExecutor implements ResetExecutor {
     const envError = checkWorkerEnv();
     if (envError) return { success: false, error: envError };
 
-    const result = await runWorkerCli(['reset', '--account', input.accountCode, '--password', input.newPassword]);
+    const result = await runWorkerCli(['reset', '--username', input.accountUsername, '--password', input.newPassword]);
     const output = parseWorkerJson<WorkerResetOutput>(result.raw);
     if (result.ok && output?.status === 'SUCCESS') {
       return { success: true };
