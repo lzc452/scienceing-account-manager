@@ -1,9 +1,10 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { LogOut } from 'lucide-vue-next'
 import Button from '@/components/ui/Button.vue'
-import { authState, isAdmin, isLoggedIn, logout } from '@/api'
+import PluginChip from '@/components/PluginChip.vue'
+import { authState, detectExtension, isLoggedIn, logout, pluginState } from '@/api'
 
 /**
  * 公开布局（首页 / 我的账号）
@@ -13,7 +14,7 @@ import { authState, isAdmin, isLoggedIn, logout } from '@/api'
  *   内容卡片。整站只有一条背景基线，白色永远是「被承载的内容面」。
  * - 顶栏右侧导航在窄屏逐级降级（隐藏用户名 → 退出按钮只留图标），
  *   保证 320px 宽下不换行、不溢出。
- * - 内容走 .page-container：最大宽度 + 水平居中；.app-main 让内容稀少时垂直居中。
+ * - 助手检测组件（PluginChip）常驻顶栏「科应共享账号」旁，全站可见。
  */
 const props = defineProps({
   /** 内容栏宽度：'default' = 1280px，'narrow' = 768px（稀疏页居中显示） */
@@ -22,6 +23,9 @@ const props = defineProps({
 
 const router = useRouter()
 const userLabel = computed(() => authState.user?.displayName || authState.user?.username || '')
+
+// 布局层启动扩展握手检测（幂等），保证顶栏的助手状态在任何页面都可用
+onMounted(() => detectExtension())
 
 async function onLogout() {
   await logout()
@@ -35,12 +39,20 @@ async function onLogout() {
       class="sticky top-0 z-20 border-b border-hairline bg-canvas/90 backdrop-blur"
     >
       <!-- 顶栏内部沿用与内容区一致的容器宽度，brand 与内容左边缘严格对齐 -->
-      <div class="page-container flex h-14 items-center justify-between gap-3">
-        <RouterLink to="/" class="min-w-0 truncate text-base font-semibold leading-6 text-ink">
+      <div class="page-container flex h-14 items-center gap-3">
+        <RouterLink to="/" class="min-w-0 shrink-0 text-base font-semibold leading-6 text-ink">
           科应共享账号
         </RouterLink>
 
-        <div class="flex shrink-0 items-center gap-2 sm:gap-3">
+        <!-- 助手检测组件：常驻头部，紧跟「科应共享账号」 -->
+        <PluginChip
+          :state="pluginState.status"
+          :version="pluginState.version"
+          :min-version="pluginState.minimumVersion"
+          class="hidden sm:flex"
+        />
+
+        <div class="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
           <template v-if="isLoggedIn">
             <RouterLink
               v-if="isAdmin"

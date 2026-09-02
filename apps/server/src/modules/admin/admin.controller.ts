@@ -1,4 +1,4 @@
-import { Controller, Get, Param, ParseIntPipe, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { AdminService, type AdminAccountView, type AdminLeaseView } from './admin.service';
 import { AuthGuard } from '../../guards/auth.guard';
 import { AdminGuard } from '../../guards/admin.guard';
@@ -18,6 +18,16 @@ export class AdminController {
   @Get('leases')
   leases(): AdminLeaseView[] {
     return this.adminService.listLeases();
+  }
+
+  /** 修改账号名称（对应科应平台账号） */
+  @Patch('accounts/:id')
+  renameAccount(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: { username?: string; code?: string },
+    @CurrentUser() admin: AuthUser,
+  ): AdminAccountView {
+    return this.adminService.rename(id, dto, admin);
   }
 
   @Post('accounts/:id/force-release')

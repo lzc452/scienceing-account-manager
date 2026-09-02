@@ -2,10 +2,11 @@ import * as fs from 'node:fs';
 import { chromium } from 'playwright';
 import { loadConfigFromEnv } from './config';
 import { loginAdmin, saveStorageState } from './auth';
+import { checkHealth } from './health';
 import { ResetWorker, type ResetJobInput } from './worker';
 
 interface ParsedArgs {
-  command: 'login' | 'reset' | 'run' | 'help';
+  command: 'login' | 'reset' | 'run' | 'check' | 'help';
   account?: string;
   password?: string;
   jobsFile?: string;
@@ -80,6 +81,24 @@ async function cmdRun(jobsFile: string | undefined): Promise<number> {
   }
 }
 
+/** 健康检查（PRD §49）：登录 / 账号管理页 / 改密入口三项，供后端 HEALTH_EXECUTOR 子进程调用。 */
+async function cmdCheck(): Promise<number> {
+  const config = loadConfigFromEnv();
+  const browser = await chromium.launch({
+    channel: config.browserChannel,
+    headless: config.headless,
+    args: ['--no-sandbox', '--disable-dev-shm-usage'],
+  });
+  try {
+    const detail = await checkHealth(browser, config);
+    const ok = detail.adminLoginOk && detail.accountPageOk && detail.resetEntryOk;
+    printJson({ ok, ...detail });
+    return ok ? 0 : 1;
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+}
+
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
   switch (args.command) {
@@ -90,6 +109,8 @@ async function main(): Promise<number> {
       return cmdReset(args.account, args.password);
     case 'run':
       return cmdRun(args.jobsFile);
+    case 'check':
+      return cmdCheck();
     case 'help':
     default:
       process.stdout.write(
@@ -100,6 +121,7 @@ async function main(): Promise<number> {
           '  node dist/cli.js login                      管理员首次登录并保存 storageState（PRD §29）',
           '  node dist/cli.js reset --account KY-01 --password <新密码>',
           '  node dist/cli.js run --jobs <队列JSON文件>   串行消费队列（PRD §28）',
+          '  node dist/cli.js check                      健康检查三项：登录/账号管理页/改密入口（PRD §49）',
           '',
           '环境变量:',
           '  SCIENCING_ADMIN_URL        科应管理后台地址',

@@ -16,9 +16,10 @@ playwright/worker/
 │   ├── selectors.ts     # 语义定位器（getByRole/getByLabel/getByText，PRD §27）
 │   ├── auth.ts          # storageState 保存/加载 + 登录 + 会话失效自动重登（PRD §29）
 │   ├── reset-flow.ts    # 单次改密流程 + 成功文案校验（PRD §31）
+│   ├── health.ts        # 健康检查三项：登录/账号管理页/改密入口（PRD §49）
 │   ├── pipeline.ts      # 纯编排：失败重试（PRD §48）+ 串行队列（PRD §28）
 │   ├── worker.ts        # ResetWorker：单 Worker 串行消费者
-│   ├── cli.ts           # 命令行入口：login / reset / run
+│   ├── cli.ts           # 命令行入口：login / reset / run / check
 │   └── tests/
 │       ├── logic.test.ts     # 纯逻辑单测（无浏览器即可运行）
 │       └── browser.test.ts   # 浏览器流程测试（依赖系统 Chrome，mock 页面）
@@ -58,6 +59,24 @@ playwright/worker/
 - `SUCCESS`：`current_password_ciphertext = pending_password_ciphertext`、`pending_password_ciphertext = NULL`、账号 `AVAILABLE`、`last_password_changed_at = now`；`reset_jobs → SUCCESS`；审计 `RESET_SUCCESS`。
 - `FAILED`：账号 `ERROR`（**绝不自动 AVAILABLE**，PRD §47）；`reset_jobs → FAILED(error_message)`；回收活动租约 `FAILED/release_reason=RESET_ERROR`；审计 `RESET_FAILED`。
 
+### t12 接线（已完成）
+
+后端 `apps/server/src/modules/automation/` 通过**子进程**调用本 Worker CLI（`dist/cli.js`）：
+
+- `PlaywrightResetExecutor`（RESET_EXECUTOR）→ `reset --account X --password Y`，解析 stdout JSON 的 `status/error`；
+- `PlaywrightHealthExecutor`（HEALTH_EXECUTOR）→ `check`，解析三项布尔结果（PRD §49）。
+
+选择子进程而非同进程 import 的原因：浏览器崩溃/超时在独立进程内隔离，不拖垮 NestJS API；Worker 与 API 各自独立升级验证。
+
+**接线所需环境变量**（Server 进程侧提供，Worker 子进程自动继承）：
+
+| 变量 | 说明 |
+| --- | --- |
+| `SCIENCING_ADMIN_URL` / `USERNAME` / `PASSWORD` | 科应后台地址与管理员凭据（PRD §42，必填） |
+| `SCIENCING_WORKER_CLI` | Worker CLI 路径（默认 `<仓库根>/playwright/worker/dist/cli.js`，需先 build） |
+| `SCIENCING_WORKER_TIMEOUT_MS` | 单次子进程超时（默认 120000ms） |
+| `SCIENCING_STORAGE_STATE` | storageState 绝对路径（默认按 cwd 解析为 `playwright/.auth/admin.json`，**生产建议显式指定绝对路径**，避免受 Server 启动目录影响） |
+
 ## 使用
 
 ```bash
@@ -75,6 +94,9 @@ pnpm --filter @scienceing/playwright-worker reset -- --account KY-01 --password 
 
 # 3) 串行消费队列（单 Worker，PRD §28）
 pnpm --filter @scienceing/playwright-worker run-queue -- --jobs ./jobs.json
+
+# 4) 健康检查三项（PRD §49，后端 HEALTH_EXECUTOR 子进程调用）
+pnpm --filter @scienceing/playwright-worker check
 ```
 
 `jobs.json` 形如 `ResetJobInput[]`：
@@ -106,6 +128,7 @@ pnpm --filter @scienceing/playwright-worker run-queue -- --jobs ./jobs.json
 ## 关键实现点
 
 - **定位器只用语义 API**（PRD §27）：`getByRole` / `getByLabel` / `getByText`，无长 CSS/XPath；账号行定位用 `getByRole('row', { name: /KY-01/ })`。科应页面改版时只改 `selectors.ts`（PRD §49 降级点）。
+- **输入框标签精确匹配**：`getByLabel('密码', { exact: true })` 与 `getByLabel('新密码', { exact: true })` —— `getByLabel` 默认子串匹配，「密码」会同时命中登录密码框与「新密码」框导致 strict 违规（已在 mock 页面上复现并修复）。
 - **点击「确定」≠ 成功**（PRD §31）：`reset-flow.ts` 点击确定后仍强制 `getByText('修改成功')` 可见才算成功，否则抛 `ResetVerificationError`。
 - **失败重试**（PRD §48）：`pipeline.runWithRetry` 每次失败等待数秒并重新打开管理页，最多 2～3 次，绝不无限重试。
 - **单 Worker 串行**（PRD §28）：`pipeline.runQueueSerial` 逐个 `await`，不并行登录管理员，避免会话互踢。

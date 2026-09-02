@@ -53,12 +53,12 @@
   --font-sans: 'Geist Sans', 'Geist', 'Noto Sans SC', 'PingFang SC',
     'Microsoft YaHei', ui-sans-serif, system-ui, sans-serif;
 
-  /* ===== 圆角（18px 交互 / 24px 容器，无第三种） ===== */
+  /* ===== 圆角（10px 交互 / 16px 容器；2xl 12px 用于输入类控件） ===== */
   --radius-md: 6px;
   --radius-lg: 10px;
   --radius-xl: 14px;
-  --radius-2xl: 18px;
-  --radius-3xl: 24px;
+  --radius-2xl: 12px;
+  --radius-3xl: 16px;
 
   /* ===== 阴影 ===== */
   --shadow-subtle: oklab(0.145 -0.00000143796 0.00000340492 / 0.05) 0px 0px 0px

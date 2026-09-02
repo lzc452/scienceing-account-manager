@@ -18,6 +18,12 @@ import { ResetWorker } from '../worker';
  *
  * 在 DSH 受限沙箱中 Chromium 因 named pipe 被禁（mojo platform_channel 拒绝访问）无法启动，
  * 这里会捕获 EPERM 并把所有用例标记为 skip，同时保留纯逻辑单测（logic.test.ts）作为可运行证据。
+ *
+ * Windows + node:test 兼容性说明：当测试文件内出现第二个 Chrome 实例（ResetWorker 自行 launch）
+ * 时，node test runner 可能因孙子进程继承 stdout 管道句柄而挂起/崩溃（本机 Node 22.22.2 复现）。
+ * 这是 runner 环境问题而非业务缺陷；同等逻辑已用独立脚本在 mock 页面上验证通过
+ * （KY-04 失败重试 FAILED/attempts 正确、串行队列 SUCCESS、会话过期自动重登回写）。
+ * 建议在 CI（Linux）或开发机上跑本套件。
  */
 
 function repoRoot(): string {

@@ -16,8 +16,9 @@ import TableHead from '@/components/ui/TableHead.vue'
 import TableHeader from '@/components/ui/TableHeader.vue'
 import TableRow from '@/components/ui/TableRow.vue'
 import { toast } from '@/components/ui/toast'
-import { createUser, getAdminUsers, updateUser } from '@/api/admin'
+import { bulkCreateUsers, createUser, getAdminUsers, updateUser } from '@/api/admin'
 import { authState } from '@/api'
+import { parseUsersCsv, usersCsvTemplate } from '@/lib/csv'
 
 const ROLE_OPTIONS = [
   { value: 'USER', label: 'USER' },
@@ -35,6 +36,79 @@ const formUser = ref(null)
 const form = ref({ username: '', displayName: '', department: '', role: 'USER', password: '' })
 
 const confirm = ref(null) // { type: 'disable'|'enable', user }
+
+// ── CSV 批量导入（上传 → 解析预览二次确认 → 批量创建） ──
+const csvInputRef = ref(null)
+const importOpen = ref(false) // 预览/确认弹窗
+const importRows = ref([]) // 解析后的行
+const importHeaderErrors = ref([])
+const importing = ref(false)
+const importResult = ref(null) // { created, failed: [] }
+
+function pickCsv() {
+  csvInputRef.value?.click()
+}
+
+function downloadTemplate() {
+  const blob = new Blob(['\uFEFF' + usersCsvTemplate()], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = '用户导入模板.csv'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function onCsvFile(event) {
+  const file = event.target.files?.[0]
+  event.target.value = '' // 允许重复选择同一文件
+  if (!file) return
+  if (!/\.csv$/i.test(file.name)) {
+    toast({ title: '请选择 CSV 文件', variant: 'destructive' })
+    return
+  }
+  const reader = new FileReader()
+  reader.onload = () => {
+    const { rows, headerErrors } = parseUsersCsv(String(reader.result ?? ''))
+    importHeaderErrors.value = headerErrors
+    importRows.value = rows
+    importResult.value = null
+    if (rows.length === 0) {
+      toast({ title: '未解析到有效数据行', description: headerErrors.join('；') || undefined, variant: 'destructive' })
+      return
+    }
+    importOpen.value = true
+  }
+  reader.onerror = () => toast({ title: '文件读取失败', variant: 'destructive' })
+  reader.readAsText(file, 'utf-8')
+}
+
+const importValidRows = computed(() => importRows.value.filter((r) => r.errors.length === 0))
+
+async function onImportConfirm() {
+  if (importValidRows.value.length === 0) return
+  importing.value = true
+  try {
+    const payload = importValidRows.value.map((r) => ({
+      username: r.username,
+      displayName: r.displayName,
+      department: r.department,
+      role: r.role,
+      password: r.password,
+    }))
+    const res = await bulkCreateUsers(payload)
+    importResult.value = res
+    toast({
+      title: `导入完成：成功 ${res.created} 个${res.failed.length ? `，失败 ${res.failed.length} 个` : ''}`,
+      variant: res.failed.length ? 'default' : 'success',
+    })
+    load()
+  } catch (e) {
+    toast({ title: e?.message || '导入失败', variant: 'destructive' })
+  } finally {
+    importing.value = false
+  }
+}
 
 const currentUsername = computed(() => authState.user?.username)
 
@@ -146,8 +220,20 @@ async function onToggleConfirm() {
         <h1 class="text-xl font-semibold leading-7 tracking-normal text-ink sm:text-2xl sm:leading-8">
           用户管理
         </h1>
-        <Button @click="openCreate">创建用户</Button>
+        <div class="flex items-center gap-2">
+          <Button variant="outline" @click="downloadTemplate">下载模板</Button>
+          <Button variant="outline" @click="pickCsv">导入CSV</Button>
+          <Button @click="openCreate">创建用户</Button>
+        </div>
       </div>
+      <!-- 隐藏的文件选择器：导入CSV按钮触发 -->
+      <input
+        ref="csvInputRef"
+        type="file"
+        accept=".csv,text/csv"
+        class="hidden"
+        @change="onCsvFile"
+      />
 
       <!-- 六列 + 三个操作按钮，舒适最小宽度 840px，溢出在卡片内部滚动 -->
       <Card class="overflow-hidden">
@@ -266,6 +352,56 @@ async function onToggleConfirm() {
         <Button variant="outline" @click="formOpen = false">取消</Button>
         <Button :disabled="pending" @click="onFormSubmit">
           {{ pending ? '提交中…' : '保存' }}
+        </Button>
+      </template>
+    </Dialog>
+
+    <!-- CSV 导入预览 / 二次确认 -->
+    <Dialog
+      :open="importOpen"
+      title="确认导入用户"
+      :description="importHeaderErrors.length
+        ? importHeaderErrors.join('；')
+        : `已解析 ${importRows.length} 行，其中 ${importValidRows.length} 行可导入。请确认下方列表后再执行导入。`"
+      @update:open="importOpen = false"
+    >
+      <div class="max-h-[50dvh] overflow-y-auto">
+        <table class="w-full text-left text-sm">
+          <thead class="sticky top-0 bg-paper">
+            <tr class="text-xs text-mid-gray">
+              <th class="py-1.5 pr-2 font-medium">#</th>
+              <th class="py-1.5 pr-2 font-medium">用户名</th>
+              <th class="py-1.5 pr-2 font-medium">姓名</th>
+              <th class="py-1.5 pr-2 font-medium">部门</th>
+              <th class="py-1.5 pr-2 font-medium">角色</th>
+              <th class="py-1.5 font-medium">检查</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in importRows" :key="row.index" class="border-t border-hairline">
+              <td class="py-1.5 pr-2 tabular-nums text-mid-gray">{{ row.index }}</td>
+              <td class="py-1.5 pr-2 font-medium">{{ row.username || '—' }}</td>
+              <td class="py-1.5 pr-2">{{ row.displayName || '—' }}</td>
+              <td class="py-1.5 pr-2 text-mid-gray">{{ row.department || '—' }}</td>
+              <td class="py-1.5 pr-2">{{ row.role }}</td>
+              <td class="py-1.5">
+                <span v-if="row.errors.length === 0" class="text-xs text-status-available">✓ 可导入</span>
+                <span v-else class="text-xs text-ember">{{ row.errors.join('；') }}</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p v-if="importResult" class="mt-3 text-sm">
+        <span class="text-status-available">成功 {{ importResult.created }} 个</span>
+        <span v-if="importResult.failed.length" class="ml-3 text-ember">
+          失败 {{ importResult.failed.length }} 个（{{ importResult.failed.map((f) => `${f.username}：${f.reason}`).join('；') }}）
+        </span>
+      </p>
+      <template #footer>
+        <Button variant="outline" @click="importOpen = false">关闭</Button>
+        <Button :disabled="importing || importValidRows.length === 0" @click="onImportConfirm">
+          {{ importing ? '导入中…' : `确认导入 ${importValidRows.length} 个用户` }}
         </Button>
       </template>
     </Dialog>

@@ -2,7 +2,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { LogOut, Menu, X } from 'lucide-vue-next'
+import PluginChip from '@/components/PluginChip.vue'
 import { cn } from '@/lib/utils'
+import { detectExtension, pluginState } from '@/api'
 
 /** 与 Tailwind 的 lg 断点保持一致 */
 const DESKTOP_QUERY = '(min-width: 1024px)'
@@ -11,17 +13,19 @@ const DESKTOP_QUERY = '(min-width: 1024px)'
  * 管理后台 App Shell（§5.4）
  *
  * 布局与层次（本次优化）：
- * - 断点 ≥1024px：侧边栏 240px 常驻（surface-alt + 右侧 hairline，与 canvas 明确分界）；
- *   断点 <1024px：侧边栏转为抽屉（fixed + 位移），顶栏出现汉堡按钮，内容区始终
- *   占满可用宽度，绝不产生横向滚动。
- * - 顶栏与内容区同用 canvas 底色，仅靠 1px hairline 分隔：白(paper) 只留给卡片，
- *   避免大面积白块与灰块生硬拼接。
- * - 内容区统一走 .page-container：最大宽度 + 水平居中，大屏不被拉伸。
+ * - 整体高度锁定为屏幕高度（h-screen + overflow-hidden）：左侧菜单高度恒等于
+ *   屏幕高度且不随页面滚动；右侧 = 头部（左面包屑 / 右账号信息）+ Content。
+ * - Content 宽度 = 屏幕宽 - 菜单宽，高度 = 屏幕高 - 头部高；内容超出时仅在
+ *   Content 内部纵向滚动，宽度永不超出。
+ * - Content：padding 12px、白底（paper），内容自上而下、自左而右排布，不居中；
+ *   内部卡片取消边框、仅保留阴影。
+ * - 断点 <1024px：侧边栏转为抽屉（fixed + 位移），顶栏出现汉堡按钮。
+ * - 助手检测组件（PluginChip）位于侧边栏品牌区，紧邻「科应共享」。
  */
 const props = defineProps({
   adminName: { type: String, default: 'admin' },
   version: { type: String, default: 'v1.0.0' },
-  /** 内容栏宽度：'default' = 1280px（列表/表格），'narrow' = 768px（表单/稀疏页） */
+  /** 兼容旧签名：内容栏宽度（新布局下 Content 恒为全宽，此参数仅保留兼容） */
   contentWidth: { type: String, default: 'default' },
 })
 
@@ -46,6 +50,8 @@ onMounted(() => {
   mediaQuery = window.matchMedia(DESKTOP_QUERY)
   isDesktop.value = mediaQuery.matches
   mediaQuery.addEventListener('change', syncViewport)
+  // 布局层启动扩展握手检测（幂等），供侧边栏品牌区的助手状态使用
+  detectExtension()
 })
 
 onBeforeUnmount(() => mediaQuery?.removeEventListener('change', syncViewport))
@@ -80,7 +86,8 @@ function isActive(path) {
 </script>
 
 <template>
-  <div class="flex min-h-screen w-full bg-canvas">
+  <!-- 整体锁定屏幕高度：页面级不滚动，滚动只发生在 Content 内部 -->
+  <div class="flex h-screen w-full overflow-hidden bg-canvas">
     <!-- 抽屉遮罩：仅移动端生效，压暗内容区但不阻断页面纵向滚动 -->
     <Transition name="drawer-fade">
       <div
@@ -92,15 +99,16 @@ function isActive(path) {
     </Transition>
 
     <!--
-      侧边栏：surface-alt(#fafafa) 比 canvas 亮一档，配合右侧 1px hairline
-      形成明确的竖向分区；移动端为 fixed 抽屉（最高一层阴影）。
+      侧边栏：surface-alt(#fafafa) + 右侧 1px hairline 形成竖向分区。
+      桌面端 static + 父容器 h-screen → 高度恒等于屏幕高度、不随内容滚动；
+      移动端为 fixed 抽屉（最高一层阴影）。
     -->
     <aside
       id="admin-sidebar"
       :class="
         cn(
           'z-40 flex w-60 max-w-[80vw] shrink-0 flex-col border-r border-hairline bg-surface-alt',
-          'fixed inset-y-0 left-0 transition-transform duration-200 ease-out lg:static lg:translate-x-0',
+          'fixed inset-y-0 left-0 transition-transform duration-200 ease-out lg:static lg:h-screen lg:translate-x-0',
           drawerOpen ? 'translate-x-0 shadow-overlay' : '-translate-x-full',
         )
       "
@@ -111,6 +119,13 @@ function isActive(path) {
         <div class="min-w-0">
           <div class="truncate text-base font-semibold leading-6 text-ink">科应共享</div>
           <div class="mt-0.5 text-xs text-mid-gray">账号管理平台</div>
+          <!-- 助手检测组件：紧邻品牌区（管理员页面与公开页面同理） -->
+          <PluginChip
+            :state="pluginState.status"
+            :version="pluginState.version"
+            :min-version="pluginState.minimumVersion"
+            class="mt-2"
+          />
         </div>
         <!-- 仅在抽屉态需要关闭按钮 -->
         <button
@@ -156,10 +171,14 @@ function isActive(path) {
       </div>
     </aside>
 
-    <!-- 内容列：min-w-0 保证内部表格 / 长文本只在本列内收缩、不撑破页面 -->
-    <div class="flex min-w-0 flex-1 flex-col">
+    <!--
+      右侧面板：头部（左面包屑 / 右账号信息）+ Content。
+      flex-col + min-h-0：Content 高度 = 屏幕高 - 头部高；overflow-y-auto 让
+      超出内容只在 Content 内滚动；min-w-0 + overflow-x-hidden 保证宽度不超出。
+    -->
+    <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
       <header
-        class="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b border-hairline bg-canvas/90 px-4 backdrop-blur sm:px-6"
+        class="flex h-14 shrink-0 items-center gap-3 border-b border-hairline bg-canvas px-4 sm:px-6"
       >
         <button
           type="button"
@@ -194,15 +213,12 @@ function isActive(path) {
         </div>
       </header>
 
-      <!-- 内容承载区：统一留白节奏 + 内容少时垂直居中 -->
-      <main class="app-main">
-        <div
-          :class="
-            cn('page-container', contentWidth === 'narrow' && 'page-container-narrow')
-          "
-        >
-          <slot />
-        </div>
+      <!--
+        Content：白底（paper）+ padding 12px；宽 = 屏宽 - 菜单宽，高 = 屏高 - 头部高；
+        超出仅在内部滚动。内容自上而下、自左而右排布（默认块级流），不水平/垂直居中。
+      -->
+      <main class="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-paper p-3">
+        <slot />
       </main>
     </div>
   </div>

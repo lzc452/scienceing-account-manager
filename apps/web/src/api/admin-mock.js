@@ -146,6 +146,18 @@ async function enable(id) {
   return { accountId: account.id, enabled: true }
 }
 
+async function renameAccount(id, dto) {
+  await delay()
+  const account = accountOf(id)
+  const username = (dto.username ?? '').trim()
+  if (!username) throw httpError('账号名称不能为空', 400)
+  if (state.accounts.some((a) => a.id !== account.id && a.username === username)) {
+    throw httpError(`账号名称「${username}」已被其他账号使用`, 409)
+  }
+  account.username = username
+  return { ...account }
+}
+
 async function listUsers() {
   await delay()
   return cloneUsers()
@@ -180,6 +192,24 @@ async function updateUser(id, dto) {
   if (dto.enabled !== undefined) user.enabled = dto.enabled
   user.updatedAt = new Date().toISOString()
   return { ...user }
+}
+
+async function bulkCreateUsers(users) {
+  await delay()
+  const failed = []
+  let created = 0
+  for (const dto of users) {
+    try {
+      if (!dto.username || !dto.displayName || !dto.password) {
+        throw httpError('username / displayName / password 必填', 400)
+      }
+      await createUser(dto)
+      created += 1
+    } catch (err) {
+      failed.push({ username: dto.username || '(空)', reason: err.message })
+    }
+  }
+  return { created, failed }
 }
 
 async function listLeases() {
@@ -233,8 +263,10 @@ export const adminMockApi = {
   markAvailable,
   disable,
   enable,
+  renameAccount,
   listUsers,
   createUser,
+  bulkCreateUsers,
   updateUser,
   listLeases,
   listLogs,

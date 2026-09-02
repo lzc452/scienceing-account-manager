@@ -40,12 +40,26 @@ export function enableAccount(accountId) {
     : http('POST', `/admin/accounts/${accountId}/enable`)
 }
 
+/** 修改账号名称（对应科应平台账号）：PATCH /admin/accounts/:id */
+export function renameAccount(accountId, dto) {
+  return USE_MOCK
+    ? adminMockApi.renameAccount(accountId, dto)
+    : http('PATCH', `/admin/accounts/${accountId}`, dto)
+}
+
 export function getAdminUsers() {
   return USE_MOCK ? adminMockApi.listUsers() : http('GET', '/admin/users')
 }
 
 export function createUser(dto) {
   return USE_MOCK ? adminMockApi.createUser(dto) : http('POST', '/admin/users', dto)
+}
+
+/** CSV 批量导入（前端解析、二次确认后整批提交）：POST /admin/users/bulk */
+export function bulkCreateUsers(users) {
+  return USE_MOCK
+    ? adminMockApi.bulkCreateUsers(users)
+    : http('POST', '/admin/users/bulk', { users })
 }
 
 export function updateUser(userId, dto) {

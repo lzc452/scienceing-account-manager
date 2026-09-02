@@ -5,7 +5,7 @@ const props = defineProps({ class: { type: [String, Object, Array], default: und
 </script>
 
 <template>
-  <div :class="cn('rounded-3xl border border-hairline bg-paper shadow-subtle', props.class)">
+  <div :class="cn('rounded-3xl bg-paper shadow-subtle', props.class)">
     <slot />
   </div>
 </template>

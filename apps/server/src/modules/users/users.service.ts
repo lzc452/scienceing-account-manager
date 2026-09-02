@@ -66,6 +66,63 @@ export class UsersService {
     return toAuthUser(row);
   }
 
+  /** 批量导入（CSV 二次确认后调用）：逐行校验入库，重复/非法行不阻断整体，返回逐行结果。 */
+  async createMany(
+    rows: CreateUserDto[],
+    admin: AuthUser,
+  ): Promise<{ created: number; failed: Array<{ username: string; reason: string }> }> {
+    const failed: Array<{ username: string; reason: string }> = [];
+    let created = 0;
+    const seen = new Set<string>();
+
+    for (const dto of rows) {
+      const username = (dto.username ?? '').trim();
+      try {
+        if (!username || !(dto.displayName ?? '').trim() || !(dto.password ?? '')) {
+          throw new BadRequestException('username / displayName / password 必填');
+        }
+        const role = dto.role ?? USER_ROLE.USER;
+        if (role !== USER_ROLE.USER && role !== USER_ROLE.ADMIN) {
+          throw new BadRequestException('role 必须是 USER 或 ADMIN');
+        }
+        // 同批次内查重 + 库内查重（username 列有 UNIQUE 约束，需先行判断以免整批失败）
+        if (seen.has(username)) {
+          throw new ConflictException('批内用户名重复');
+        }
+        if (this.dbService.db.prepare('SELECT id FROM users WHERE username = ?').get(username)) {
+          throw new ConflictException('用户名已存在');
+        }
+        seen.add(username);
+
+        const passwordHash = await hashPassword(dto.password ?? '');
+        const now = nowIso();
+        this.dbService.db
+          .prepare(`
+            INSERT INTO users (username, display_name, department, password_hash, role, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+          `)
+          .run(username, (dto.displayName ?? '').trim(), dto.department ?? '', passwordHash, role, now, now);
+        created += 1;
+      } catch (err) {
+        failed.push({
+          username: username || '(空)',
+          reason: err instanceof Error ? err.message : '未知错误',
+        });
+      }
+    }
+
+    if (created > 0 || failed.length > 0) {
+      this.audit.record({
+        action: AUDIT_ACTION.USER_BULK_CREATE,
+        result: AUDIT_RESULT.SUCCESS,
+        userId: admin.id,
+        metadata: { created, failed: failed.length },
+      });
+    }
+
+    return { created, failed };
+  }
+
   async update(id: number, dto: UpdateUserDto, admin: AuthUser): Promise<AuthUser> {
     const existing = this.dbService.db.prepare('SELECT * FROM users WHERE id = ?').get(id) as unknown as UserRow | undefined;
     if (!existing) {

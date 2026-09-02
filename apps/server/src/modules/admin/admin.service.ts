@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { DatabaseService } from '../../db/database.service';
 import { AuditService } from '../../db/audit.service';
@@ -184,6 +184,73 @@ export class AdminService {
       metadata: { accountCode: account.code },
     });
     return { accountId, enabled: true };
+  }
+
+  /**
+   * 修改账号名称（对应科应平台账号 username）。
+   * 重置密码等自动化流程依据该名称定位科应平台上的账号，故必须保证唯一。
+   */
+  rename(accountId: number, dto: { username?: string; code?: string }, adminUser: AuthUser): AdminAccountView {
+    const account = this.getAccount(accountId);
+    const db = this.dbService.db;
+
+    const username = dto.username?.trim();
+    const code = dto.code?.trim();
+    if (username !== undefined && username !== null && !username) {
+      throw new BadRequestException('账号名称不能为空');
+    }
+    if (code !== undefined && code !== null && !code) {
+      throw new BadRequestException('账号编号不能为空');
+    }
+
+    if (username && username !== account.username) {
+      const dup = db.prepare('SELECT id FROM scienceing_accounts WHERE username = ? AND id != ?').get(username, accountId);
+      if (dup) {
+        throw new ConflictException(`账号名称「${username}」已被其他账号使用`);
+      }
+    }
+    if (code && code !== account.code) {
+      const dup = db.prepare('SELECT id FROM scienceing_accounts WHERE code = ? AND id != ?').get(code, accountId);
+      if (dup) {
+        throw new ConflictException(`账号编号「${code}」已被其他账号使用`);
+      }
+    }
+
+    const fields: string[] = [];
+    const values: Array<string | number> = [];
+    if (username) {
+      fields.push('username = ?');
+      values.push(username);
+    }
+    if (code) {
+      fields.push('code = ?');
+      values.push(code);
+    }
+    if (fields.length > 0) {
+      fields.push('updated_at = ?');
+      values.push(nowIso());
+      db.prepare(`UPDATE scienceing_accounts SET ${fields.join(', ')} WHERE id = ?`).run(...values, accountId);
+    }
+
+    this.audit.record({
+      action: AUDIT_ACTION.ACCOUNT_RENAME,
+      result: AUDIT_RESULT.SUCCESS,
+      userId: adminUser.id,
+      accountId,
+      metadata: { from: account.username, to: username ?? account.username },
+    });
+
+    const updated = this.getAccount(accountId);
+    return {
+      id: updated.id,
+      code: updated.code,
+      username: updated.username,
+      status: updated.status,
+      currentUser: null,
+      lastPasswordChangedAt: updated.last_password_changed_at,
+      enabled: updated.enabled === 1,
+      createdAt: updated.created_at,
+    };
   }
 
   private getAccount(accountId: number): AccountRow {

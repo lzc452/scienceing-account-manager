@@ -4,14 +4,12 @@ import { useRouter } from 'vue-router'
 import PublicLayout from '@/layouts/PublicLayout.vue'
 import StatBlock from '@/components/StatBlock.vue'
 import StatusDot from '@/components/StatusDot.vue'
-import PluginChip from '@/components/PluginChip.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import { toast } from '@/components/ui/toast'
 import {
   claimLease,
-  detectExtension,
   formatDuration,
   getAvailability,
   getCurrentLease,
@@ -55,7 +53,6 @@ async function load() {
 }
 
 onMounted(() => {
-  detectExtension()
   load()
   pollTimer = window.setInterval(load, 10_000)
 })
@@ -63,14 +60,6 @@ onMounted(() => {
 onBeforeUnmount(() => window.clearInterval(pollTimer))
 
 const pluginReady = computed(() => pluginState.status === 'ready')
-
-const pluginHint = computed(() => {
-  if (pluginReady.value) return ''
-  if (pluginState.status === 'detecting') return '正在检测助手…'
-  if (pluginState.status === 'outdated') return `版本过旧，请下载最新版 ${pluginState.latestVersion || ''}`
-  if (pluginState.status === 'error') return '账号管理服务连接异常，暂时无法领取'
-  return '未检测到助手，请安装后重试'
-})
 
 /** 由 estimatedReleaseAt（ISO 时间戳）计算剩余秒数。 */
 function remainingOf(account) {
@@ -117,23 +106,12 @@ async function onCta() {
       不再自带 max-w/px/py —— 这些交给 .page-container，保证大屏居中、小屏不贴边。
     -->
     <div class="flex flex-col gap-6">
-      <!-- 插件状态条（置于头部，第一时间感知助手状态） -->
-      <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <PluginChip
-          :state="pluginState.status"
-          :version="pluginState.version"
-          :min-version="pluginState.minimumVersion"
-        />
-        <p v-if="!pluginReady && isLoggedIn" class="text-xs text-mid-gray">
-          {{ pluginHint }}
-        </p>
-      </div>
-
       <!--
         统计概览：四项指标收进一张卡片，用 1px gap 的 hairline 网格做分隔
         （卡片底 = hairline，单元格底 = paper，缝隙即分割线），
         既给出明确分区，又避免再引入一块大面积色块。
         2 列（移动端）→ 4 列（≥640px），字号随断点递进。
+        助手检测组件已移至顶栏「科应共享账号」旁（PublicLayout）。
       -->
       <Card class="overflow-hidden">
         <div

@@ -6,6 +6,9 @@ import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import Dialog from '@/components/ui/Dialog.vue'
+import Input from '@/components/ui/Input.vue'
+import Label from '@/components/ui/Label.vue'
+import Select from '@/components/ui/Select.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import Table from '@/components/ui/Table.vue'
 import TableBody from '@/components/ui/TableBody.vue'
@@ -20,6 +23,7 @@ import {
   forceRelease,
   getAdminAccounts,
   markAvailable,
+  renameAccount as renameAccountApi,
   resetPassword,
 } from '@/api/admin'
 import { toStatusKind } from '@/lib/status'
@@ -29,6 +33,18 @@ const error = ref('')
 const accounts = ref([])
 const pending = ref(false)
 const dialog = ref(null) // { type, account }
+
+// 改名表单（Bug1：支持修改账号名称，对应科应平台账号）
+const renameOpen = ref(false)
+const renameTarget = ref(null)
+const renameValue = ref('')
+
+// 重置密码时选中的账号 id（默认为点击行，可切换）
+const resetTargetId = ref(null)
+const resetTarget = computed(() => accounts.value.find((a) => a.id === resetTargetId.value) ?? null)
+const accountOptions = computed(() =>
+  accounts.value.map((a) => ({ value: a.id, label: `${a.code} · ${a.username}` })),
+)
 
 const errorAccounts = computed(() => accounts.value.filter((a) => a.status === 'ERROR'))
 
@@ -62,7 +78,7 @@ const dialogMeta = computed(() => {
     return { title: `强制回收 ${account.code}`, description: '将重置密码并立即退出当前使用人的科应会话。', destructive: true, confirm: '确认回收' }
   }
   if (type === 'reset-password') {
-    return { title: `重置密码 ${account.code}`, description: '手动重置将立即踢出当前会话，并进入回收流程。', destructive: false, confirm: '确认重置' }
+    return { title: '重置密码', description: '手动重置将立即踢出当前会话，并进入回收流程。请确认选中的科应账号。', destructive: false, confirm: '确认重置' }
   }
   if (type === 'disable') {
     return { title: `禁用账号 ${account.code}`, description: '禁用后该账号不可再被领取；若有活动租约将一并回收。', destructive: true, confirm: '确认禁用' }
@@ -78,18 +94,44 @@ const dialogMeta = computed(() => {
 
 function openDialog(type, account) {
   dialog.value = { type, account }
+  if (type === 'reset-password') resetTargetId.value = account.id
+}
+
+function openRename(account) {
+  renameTarget.value = account
+  renameValue.value = account.username
+  renameOpen.value = true
+}
+
+async function onRenameSubmit() {
+  const name = renameValue.value.trim()
+  if (!name) {
+    toast({ title: '账号名称不能为空', variant: 'destructive' })
+    return
+  }
+  pending.value = true
+  try {
+    await renameAccountApi(renameTarget.value.id, { username: name })
+    toast({ title: '账号名称已更新', description: `${renameTarget.value.code} → ${name}`, variant: 'success' })
+    renameOpen.value = false
+    load()
+  } catch (e) {
+    toast({ title: e?.message || '修改失败', variant: 'destructive' })
+  } finally {
+    pending.value = false
+  }
 }
 
 async function onConfirm() {
-  const { type, account } = dialog.value
+  const { type } = dialog.value
   pending.value = true
   try {
-    if (type === 'force-release') await forceRelease(account.id)
-    else if (type === 'reset-password') await resetPassword(account.id)
-    else if (type === 'disable') await disableAccount(account.id)
-    else if (type === 'mark-available') await markAvailable(account.id)
-    else if (type === 'enable') await enableAccount(account.id)
-    toast({ title: '操作已提交', description: `${account.code} 状态已更新`, variant: 'success' })
+    if (type === 'force-release') await forceRelease(dialog.value.account.id)
+    else if (type === 'reset-password') await resetPassword(resetTargetId.value)
+    else if (type === 'disable') await disableAccount(dialog.value.account.id)
+    else if (type === 'mark-available') await markAvailable(dialog.value.account.id)
+    else if (type === 'enable') await enableAccount(dialog.value.account.id)
+    toast({ title: '操作已提交', description: '状态已更新', variant: 'success' })
     dialog.value = null
     load()
   } catch (e) {
@@ -144,10 +186,11 @@ async function onFix(account) {
         窄于它时在卡片内部横向滚动，页面本身不产生横向滚动条。
       -->
       <Card class="overflow-hidden">
-        <Table min-width="min-w-[880px]">
+        <Table min-width="min-w-[980px]">
           <TableHeader>
             <TableRow>
               <TableHead>账号</TableHead>
+              <TableHead>科应账号</TableHead>
               <TableHead>状态</TableHead>
               <TableHead>使用者</TableHead>
               <TableHead>最后改密</TableHead>
@@ -157,12 +200,12 @@ async function onFix(account) {
           <TableBody>
             <template v-if="loading">
               <TableRow v-for="i in 5" :key="i">
-                <TableCell colspan="5"><Skeleton class="h-6 w-full" /></TableCell>
+                <TableCell colspan="6"><Skeleton class="h-6 w-full" /></TableCell>
               </TableRow>
             </template>
             <template v-else-if="error">
               <TableRow>
-                <TableCell colspan="5" class="py-6 text-center text-mid-gray">
+                <TableCell colspan="6" class="py-6 text-center text-mid-gray">
                   {{ error }}
                   <Button variant="outline" size="sm" class="ml-3" @click="load">重试</Button>
                 </TableCell>
@@ -171,6 +214,18 @@ async function onFix(account) {
             <template v-else>
               <TableRow v-for="account in accounts" :key="account.id" :class="!account.enabled && 'opacity-50'">
                 <TableCell class="font-medium tabular-nums">{{ account.code }}</TableCell>
+                <TableCell>
+                  <div class="flex items-center gap-2">
+                    <span class="text-mid-gray">{{ account.username }}</span>
+                    <button
+                      type="button"
+                      class="rounded-2xl px-1.5 py-0.5 text-xs text-mid-gray transition-colors hover:bg-surface-alt hover:text-ink"
+                      @click="openRename(account)"
+                    >
+                      改名
+                    </button>
+                  </div>
+                </TableCell>
                 <TableCell>
                   <Badge :tone="toStatusKind(account.status)" />
                 </TableCell>
@@ -243,6 +298,14 @@ async function onFix(account) {
       :destructive="dialogMeta?.destructive"
       @update:open="dialog = null"
     >
+      <!-- 重置密码：根据账号选择对应账号进行重置（默认为点击行） -->
+      <div v-if="dialog?.type === 'reset-password'" class="flex flex-col gap-1.5">
+        <Label>选择要重置的科应账号</Label>
+        <Select v-model="resetTargetId" :options="accountOptions" />
+        <p v-if="resetTarget" class="text-xs text-mid-gray">
+          将重置 {{ resetTarget.code }}（{{ resetTarget.username }}）的密码并回收其活动租约。
+        </p>
+      </div>
       <template #footer>
         <Button variant="outline" @click="dialog = null">取消</Button>
         <Button
@@ -251,6 +314,27 @@ async function onFix(account) {
           @click="onConfirm"
         >
           {{ pending ? '处理中…' : dialogMeta?.confirm }}
+        </Button>
+      </template>
+    </Dialog>
+
+    <!-- 修改账号名称（对应科应平台账号） -->
+    <Dialog
+      :open="renameOpen"
+      :title="`修改账号名称 ${renameTarget?.code ?? ''}`"
+      description="账号名称对应科应平台账号，重置密码等自动化流程依据该名称定位账号。"
+      @update:open="renameOpen = false"
+    >
+      <form class="flex flex-col gap-4" @submit.prevent="onRenameSubmit">
+        <div>
+          <Label>账号名称</Label>
+          <Input v-model="renameValue" placeholder="例如 ky-01" class="mt-1.5" />
+        </div>
+      </form>
+      <template #footer>
+        <Button variant="outline" @click="renameOpen = false">取消</Button>
+        <Button :disabled="pending" @click="onRenameSubmit">
+          {{ pending ? '保存中…' : '保存' }}
         </Button>
       </template>
     </Dialog>

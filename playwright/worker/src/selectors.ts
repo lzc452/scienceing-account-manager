@@ -43,10 +43,11 @@ export function successMessage(page: Page, text: string): Locator {
 export function buildSelectors(page: Page): ScienceingPageSelectors {
   return {
     loginUsername: page.getByLabel('用户名'),
-    loginPassword: page.getByLabel('密码'),
+    // exact: true —— getByLabel 默认子串匹配，「密码」会同时命中登录密码框与「新密码」框（strict 违规）。
+    loginPassword: page.getByLabel('密码', { exact: true }),
     loginButton: page.getByRole('button', { name: '登录' }),
     accountManagementHeading: page.getByRole('heading', { name: '账号管理' }),
-    newPasswordInput: page.getByLabel('新密码'),
+    newPasswordInput: page.getByLabel('新密码', { exact: true }),
     saveButton: page.getByRole('button', { name: '保存' }),
     confirmButton: page.getByRole('button', { name: '确定' }),
   };

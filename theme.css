@@ -58,8 +58,8 @@
   --radius-md: 6px;
   --radius-lg: 10px;
   --radius-xl: 14px;
-  --radius-2xl: 18px;
-  --radius-3xl: 24px;
+  --radius-2xl: 12px;
+  --radius-3xl: 16px;
 
   /* Shadows */
   --shadow-subtle: oklab(0.145 -0.00000143796 0.00000340492 / 0.05) 0px 0px 0px 1px, rgba(0, 0, 0, 0.1) 0px 1px 3px 0px, rgba(0, 0, 0, 0.1) 0px 1px 2px -1px;

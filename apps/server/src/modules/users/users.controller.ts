@@ -22,6 +22,15 @@ export class UsersController {
     return this.usersService.create(dto, admin);
   }
 
+  /** CSV 批量导入（前端解析后二次确认，整批提交） */
+  @Post('bulk')
+  createMany(
+    @Body() dto: { users?: CreateUserDto[] },
+    @CurrentUser() admin: AuthUser,
+  ): Promise<{ created: number; failed: Array<{ username: string; reason: string }> }> {
+    return this.usersService.createMany(dto.users ?? [], admin);
+  }
+
   @Patch(':id')
   update(
     @Param('id', ParseIntPipe) id: number,

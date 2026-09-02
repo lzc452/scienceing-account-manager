@@ -347,12 +347,31 @@ export class LeasesService {
     };
   }
 
+  /**
+   * 解密账号密码。密文损坏或主密钥不匹配（如换了 SCIENCEING_MASTER_KEY）时
+   * decipher.final() 会抛错——不能让整个 claim 500：降级返回空密码并记审计，
+   * 由管理员通过「重置密码」流程重新生成可解密的密码。
+   */
   private decryptAccountPassword(account: AccountRow): string {
     if (!account.current_password_ciphertext) {
       return '';
     }
-    const payload = parsePayload(account.current_password_ciphertext);
-    return decryptSecret(payload, loadMasterKey());
+    try {
+      const payload = parsePayload(account.current_password_ciphertext);
+      return decryptSecret(payload, loadMasterKey());
+    } catch (err) {
+      console.error(
+        `[leases] 账号 ${account.code} 密码解密失败（密文损坏或主密钥不匹配）:`,
+        err instanceof Error ? err.message : err,
+      );
+      this.audit.record({
+        action: AUDIT_ACTION.PASSWORD_DECRYPT_FAILED,
+        result: AUDIT_RESULT.FAILED,
+        accountId: account.id,
+        metadata: { accountCode: account.code, reason: 'decrypt_failed' },
+      });
+      return '';
+    }
   }
 
   private inactivityTimeoutSeconds(): number {
