@@ -6,7 +6,7 @@ import PluginChip from '@/components/PluginChip.vue'
 import Dialog from '@/components/ui/Dialog.vue'
 import Button from '@/components/ui/Button.vue'
 import { cn } from '@/lib/utils'
-import { detectExtension, pluginState } from '@/api'
+import { detectExtension, downloadExtensionZip, loadExtensionPackage, pluginState } from '@/api'
 
 /** 与 Tailwind 的 lg 断点保持一致 */
 const DESKTOP_QUERY = '(min-width: 1024px)'
@@ -61,6 +61,8 @@ onMounted(() => {
   mediaQuery.addEventListener('change', syncViewport)
   // 布局层启动扩展握手检测（幂等），供侧边栏品牌区的助手状态使用
   detectExtension()
+  // 扩展下载包元信息（版本/更新时间），失败不影响固定路径的下载入口
+  loadExtensionPackage()
 })
 
 onBeforeUnmount(() => mediaQuery?.removeEventListener('change', syncViewport))
@@ -177,6 +179,7 @@ function isActive(path) {
             :state="pluginState.status"
             :version="pluginState.version"
             :min-version="pluginState.minimumVersion"
+            @download="downloadExtensionZip"
           />
         </div>
       </div>

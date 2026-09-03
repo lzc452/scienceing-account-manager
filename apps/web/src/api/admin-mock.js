@@ -298,6 +298,15 @@ async function getExtensionConfig() {
     activityThrottleSeconds: Number(state.settings.activity_throttle_seconds),
     warningSeconds: Number(state.settings.warning_seconds),
     criticalWarningSeconds: Number(state.settings.critical_warning_seconds),
+    // 真实部署下由 deploy-lan 打包生成（apps/web/dist/downloads/extension.json）
+    package: {
+      available: true,
+      version: state.settings.extension_latest_version,
+      fileName: 'scienceing-extension.zip',
+      size: 0,
+      downloadPath: '/downloads/scienceing-extension.zip',
+      updatedAt: new Date().toISOString(),
+    },
   }
 }
 

@@ -77,6 +77,65 @@ function applyExtensionState(detail) {
   pluginState.status = status === 'ready' || status === 'outdated' || status === 'error' ? status : 'missing'
 }
 
+/**
+ * 扩展下载包（由 deploy-lan 在部署时生成并放到前端静态目录，由网关托管）。
+ *
+ * 固定文件名保证前端无需知道版本号即可给出稳定入口；
+ * 真实版本/更新时间由后端 GET /extension/config 的 package 字段补充（见 loadExtensionPackage）。
+ */
+export const EXTENSION_DOWNLOAD_PATH = '/downloads/scienceing-extension.zip'
+
+export const extensionPackage = reactive({
+  available: false,
+  version: '',
+  size: 0,
+  updatedAt: '',
+  downloadPath: EXTENSION_DOWNLOAD_PATH,
+})
+
+let packageLoading = null
+
+/** 读取扩展包元信息（幂等，失败静默：下载入口仍指向固定路径，只是没有版本/时间可展示）。 */
+export function loadExtensionPackage() {
+  if (USE_MOCK) {
+    // mock 演示态：给出一个可用的展示值（真实部署时由后端 /extension/config 提供）
+    extensionPackage.available = true
+    extensionPackage.version = '1.2.0'
+    extensionPackage.updatedAt = new Date().toISOString()
+    return Promise.resolve(extensionPackage)
+  }
+  if (packageLoading) return packageLoading
+  packageLoading = http('GET', '/extension/config')
+    .then((cfg) => {
+      const pkg = cfg?.package
+      extensionPackage.available = Boolean(pkg?.available)
+      extensionPackage.version = pkg?.version || ''
+      extensionPackage.size = Number(pkg?.size || 0)
+      extensionPackage.updatedAt = pkg?.updatedAt || ''
+      extensionPackage.downloadPath = pkg?.downloadPath || EXTENSION_DOWNLOAD_PATH
+      return extensionPackage
+    })
+    .catch(() => {
+      extensionPackage.available = false
+      return extensionPackage
+    })
+    .finally(() => {
+      packageLoading = null
+    })
+  return packageLoading
+}
+
+/** 触发浏览器下载扩展 zip（同源静态文件，直接走 <a download>）。 */
+export function downloadExtensionZip() {
+  const a = document.createElement('a')
+  a.href = extensionPackage.downloadPath || EXTENSION_DOWNLOAD_PATH
+  a.download = ''
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
 function safeParse(value) {
   if (!value) return null
   try {

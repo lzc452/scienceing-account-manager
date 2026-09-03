@@ -46,6 +46,8 @@ const MIME = {
   '.ttf': 'font/ttf',
   '.txt': 'text/plain; charset=utf-8',
   '.map': 'application/json',
+  '.zip': 'application/zip',
+  '.crx': 'application/x-chrome-extension',
 };
 
 function log(msg) {
@@ -69,10 +71,15 @@ async function serveStatic(req, res) {
   let filePath = safePath(pathname);
   if (!filePath) { res.writeHead(403); res.end('Forbidden'); return; }
 
+  // /downloads/* 是真实文件分发（扩展 zip）：缺失必须 404，
+  // 不能回退 index.html，否则用户会下载到一个 HTML。
+  const isDownload = pathname.startsWith('/downloads/');
+
   try {
     let st = await stat(filePath);
     if (st.isDirectory()) { filePath = join(filePath, 'index.html'); st = await stat(filePath); }
   } catch {
+    if (isDownload) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Not Found'); return; }
     // 文件不存在：SPA history 回退（刷新 /admin/accounts 等不 404）
     filePath = join(ROOT, 'index.html');
   }
@@ -81,10 +88,12 @@ async function serveStatic(req, res) {
     const body = await readFile(filePath);
     const type = MIME[extname(filePath).toLowerCase()] || 'application/octet-stream';
     const isAsset = /\/assets\//.test(req.url);
-    res.writeHead(200, {
+    const headers = {
       'Content-Type': type,
-      'Cache-Control': isAsset ? 'public, max-age=604800, immutable' : 'no-cache',
-    });
+      'Cache-Control': isAsset ? 'public, max-age=604800, immutable' : (isDownload ? 'no-cache' : 'no-cache'),
+    };
+    if (isDownload) headers['Content-Disposition'] = `attachment; filename="${filePath.split(/[\\/]/).pop()}"`;
+    res.writeHead(200, headers);
     res.end(body);
   } catch {
     res.writeHead(500);

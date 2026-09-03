@@ -154,6 +154,21 @@ export interface ExtensionConfigDto {
   activityThrottleSeconds: number;
   warningSeconds: number;
   criticalWarningSeconds: number;
+  /** 浏览器扩展分发包（deploy-lan 部署时生成到 /downloads/scienceing-extension.zip） */
+  package: ExtensionPackageDto;
+}
+
+export interface ExtensionPackageDto {
+  /** 包是否已生成（未部署/未执行 extension:pack 时为 false，前端据此禁用下载并提示） */
+  available: boolean;
+  version?: string;
+  fileName?: string;
+  size?: number;
+  /** 同源下载路径，如 /downloads/scienceing-extension.zip */
+  downloadPath?: string;
+  updatedAt?: IsoTimestamp;
+  /** 打包时注入的看板/后端域（http://<IP>:<网关端口>），便于排查装错旧包 */
+  dashboardOrigin?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ import Label from '@/components/ui/Label.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import { toast } from '@/components/ui/toast'
 import { getExtensionConfig, getSettings, runHealthCheck, updateSettings } from '@/api/admin'
+import { downloadExtensionZip, extensionPackage, loadExtensionPackage } from '@/api'
 
 const loading = ref(true)
 const savingKey = ref('')
@@ -48,9 +49,27 @@ async function load() {
   }
 }
 
+function formatSize(bytes) {
+  if (!bytes) return '—'
+  return bytes >= 1024 * 1024
+    ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(bytes / 1024))} KB`
+}
+
+/** 下载浏览器扩展 ZIP（部署时由 deploy-lan 打包到 /downloads/scienceing-extension.zip）。 */
+function onDownloadExtension() {
+  if (!extensionPackage.available) {
+    toast({ title: '扩展包尚未生成', description: '请先在部署机执行 deploy-lan 的 deploy / extension:pack', variant: 'destructive' })
+    return
+  }
+  downloadExtensionZip()
+  toast({ title: '开始下载', description: `扩展 ZIP v${extensionPackage.version || '—'}，解压后通过「加载已解压的扩展程序」安装` })
+}
+
 onMounted(() => {
   load()
   onCheck()
+  loadExtensionPackage()
 })
 
 async function applyRule(key) {
@@ -152,10 +171,21 @@ function formatDate(iso) {
               <span class="text-mid-gray">最新版本</span>
               <span class="ml-2 font-medium tabular-nums text-ink">{{ extensionConfig.latestVersion }}</span>
             </div>
-            <Button variant="outline" size="sm" @click="toast({ title: '下载扩展', description: 'ZIP 分发将在部署阶段提供' })">
+            <Button variant="outline" size="sm" :disabled="!extensionPackage.available" @click="onDownloadExtension">
               下载最新版 ZIP
             </Button>
           </div>
+          <p class="mt-3 text-xs text-mid-gray">
+            <template v-if="extensionPackage.available">
+              分发包 v{{ extensionPackage.version || '—' }} · {{ formatSize(extensionPackage.size) }} · 更新于
+              {{ extensionPackage.updatedAt ? formatDate(extensionPackage.updatedAt) : '—' }}；
+              同事下载后解压，在 Chrome 扩展页开启「开发者模式」→「加载已解压的扩展程序」选中解压目录即可。
+            </template>
+            <template v-else>
+              分发包尚未生成：请在部署机执行 deploy-lan 的 <code class="rounded bg-surface-alt px-1">deploy</code> 或
+              <code class="rounded bg-surface-alt px-1">extension:pack</code>，产物会自动放到 /downloads/scienceing-extension.zip。
+            </template>
+          </p>
         </div>
       </Card>
 

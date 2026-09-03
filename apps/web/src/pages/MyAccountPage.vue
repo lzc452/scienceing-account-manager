@@ -13,7 +13,7 @@ import Dialog from '@/components/ui/Dialog.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import { toast } from '@/components/ui/toast'
 import { Check, Copy } from 'lucide-vue-next'
-import { formatDuration, getCurrentLease, pluginState, releaseLease } from '@/api'
+import { downloadExtensionZip, formatDuration, getCurrentLease, pluginState, releaseLease } from '@/api'
 import { toStatusKind } from '@/lib/status'
 
 const INACTIVITY_TIMEOUT_SECONDS = 1800
@@ -205,6 +205,19 @@ async function onRelease() {
             <div class="mb-1.5 text-xs font-medium text-mid-gray">密码</div>
             <PasswordReveal :password="account?.password || ''" />
           </div>
+
+          <!-- 助手未就绪：先给出获取入口，避免用户点「打开科应」后无响应 -->
+          <p v-if="pluginState.status !== 'ready'" class="mt-4 text-xs text-mid-gray">
+            未检测到助手，「打开科应」的自动登录不可用。
+            <button
+              type="button"
+              class="font-medium text-ink underline decoration-hairline underline-offset-2 transition-colors hover:text-mid-gray"
+              @click="downloadExtensionZip"
+            >
+              下载助手 ZIP
+            </button>
+            ，解压后在 Chrome 扩展页开启「开发者模式」→「加载已解压的扩展程序」。
+          </p>
 
           <!-- 窄屏两个主操作纵向堆叠，避免按钮被压成两行文字 -->
           <div class="mt-6 flex flex-col gap-3 sm:flex-row">

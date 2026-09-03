@@ -46,6 +46,8 @@ const meta = computed(() => {
       v-if="state === 'missing' || state === 'outdated'"
       type="button"
       class="inline-flex items-center gap-1 rounded-2xl px-2 py-0.5 text-xs font-medium text-mid-gray transition-colors hover:bg-surface-alt hover:text-ink"
+      :title="state === 'outdated' ? '下载最新版助手' : '下载助手（ZIP）'"
+      :aria-label="state === 'outdated' ? '下载最新版助手' : '下载助手（ZIP）'"
       @click="emit('download')"
     >
       <Download class="size-3.5" />

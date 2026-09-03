@@ -18,14 +18,15 @@
  *   env:print         打印解析后的关键环境配置（不含密码明文以外的敏感值结构）
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, openSync, rmSync, mkdirSync, copyFileSync, readdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, openSync, rmSync, mkdirSync, copyFileSync, readdirSync, writeFileSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   log, die, section, sleep, run, mergedEnv, readEnvFile, findNodeBin, loadConfig,
   detectLanIp, httpGet, waitPort, isPortFree, pidOnPort, processCmdline, killPid, processAlive,
   writeJson, readJson, findNginxExe, psJson, dirFilesRecursive, writeZip,
   REPO_ROOT, APP_SERVER, APP_WEB, APP_EXTENSION, WORKER_DIR, WEB_DIST, RUN_DIR, DIST_DIR, ENV_FILE,
-  EXT_LAN_DIR, BACKEND_DEFAULT_PORT, GATEWAY_DEFAULT_PORT,
+  EXT_LAN_DIR, WEB_DOWNLOADS_DIR, EXT_PACKAGE_ZIP, EXT_PACKAGE_JSON,
+  BACKEND_DEFAULT_PORT, GATEWAY_DEFAULT_PORT,
 } from './lib.mjs';
 import {
   ensureNginxPrefix, nginxTest, nginxStart, nginxStop, nginxVersion,
@@ -213,7 +214,10 @@ async function startGateway({ nodeBin, cfg, gatewayPort, backendPort, lanIp }) {
   const root = await waitHttp(`http://127.0.0.1:${gatewayPort}/`, 15_000);
   const api = await waitHttp(`http://127.0.0.1:${gatewayPort}/api/extension/config`, 15_000);
   const ping = await httpGet(`http://127.0.0.1:${gatewayPort}/__gateway__/ping`, 3000);
+  const zipUrl = `http://127.0.0.1:${gatewayPort}/downloads/${EXT_PACKAGE_ZIP}`;
+  const zip = existsSync(join(WEB_DOWNLOADS_DIR, EXT_PACKAGE_ZIP)) ? await httpGet(zipUrl, 5000) : null;
   log(`网关自检：/ → ${root.status ?? root.error}，/api/extension/config → ${api.status ?? api.error}${ping.status ? `，ping → ${ping.status}` : ''}`);
+  if (zip) log(`扩展下载自检：${zipUrl} → ${zip.status ?? zip.error}`);
   if (root.status !== 200 || api.status !== 200) {
     die('网关健康自检未通过，请查看日志（deploy-lan/run/*.log、nginx-prefix/logs/error.log）。');
   }
@@ -228,14 +232,40 @@ async function buildServer({ nodeBin }) {
   await run(nodeBin, [tsc, '-p', join(APP_SERVER, 'tsconfig.json')], { cwd: REPO_ROOT });
 }
 
+/**
+ * 把 staging 目录整体覆盖同步到 web dist（只增/覆盖，不删除）。
+ *
+ * 只覆盖不删除的原因：
+ *  1) dist/downloads 里放着部署时生成的扩展 zip，不能被构建清掉；
+ *  2) 本机（Windows）删除常被安全策略拦截，脚本一律避开删除。
+ */
+function syncDir(src, dst) {
+  mkdirSync(dst, { recursive: true });
+  let count = 0;
+  for (const entry of readdirSync(src, { withFileTypes: true })) {
+    const s = join(src, entry.name);
+    const d = join(dst, entry.name);
+    if (entry.isDirectory()) count += syncDir(s, d);
+    else { copyFileSync(s, d); count += 1; }
+  }
+  return count;
+}
+
 async function buildWeb({ nodeBin }) {
   section('构建前端（vite build）');
   const vite = join(APP_WEB, 'node_modules', 'vite', 'bin', 'vite.js');
   if (!existsSync(vite)) die(`vite 不存在：${vite}（请先安装依赖 node_modules）`);
   const env = mergedEnv({ VITE_USE_MOCK: 'false', NODE_ENV: 'production' });
-  await run(nodeBin, [vite, 'build', '--configLoader', 'native', '--emptyOutDir', 'false'], { cwd: APP_WEB, env });
-  if (!existsSync(join(WEB_DIST, 'index.html'))) die('前端构建产物缺失 index.html');
-  log(`前端产物就绪：${WEB_DIST}`);
+  // 先构建到暂存目录再同步到 dist：
+  // 让 vite 直接覆盖 dist 时，Windows 上会随机对个别产物（字体/入口 chunk）
+  // 抛 EPERM（文件被占用），中断的构建会把 index-*.js 写成 0 字节 → 整站白屏。
+  // 暂存目录是“新文件写入”，不会撞锁；同步阶段即使个别文件失败也只是旧文件仍在。
+  const stage = join(APP_WEB, 'dist-build');
+  await run(nodeBin, [vite, 'build', '--configLoader', 'native', '--outDir', 'dist-build', '--emptyOutDir', 'false'], { cwd: APP_WEB, env });
+  if (!existsSync(join(stage, 'index.html'))) die('前端构建产物缺失 index.html');
+  const n = syncDir(stage, WEB_DIST);
+  if (!existsSync(join(WEB_DIST, 'index.html'))) die('前端产物同步失败：dist 缺少 index.html');
+  log(`前端产物就绪：${WEB_DIST}（同步 ${n} 个文件，暂存目录 ${stage}）`);
 }
 
 async function buildWorker({ nodeBin }) {
@@ -318,13 +348,52 @@ async function packLanExtension({ cfg, gatewayPort, lanIp, nodeBin }) {
   log(out);
   // 版本号
   const manifest = JSON.parse(readFileSync(join(EXT_LAN_DIR, 'manifest.json'), 'utf8'));
+  const entries = srcFiles.map((f) => ({
+    absPath: join(EXT_LAN_DIR, f.relPath.replace(/\//g, '\\')),
+    relPath: f.relPath,
+  }));
+
+  // 1) 版本化归档（保留历史包，便于回溯）
   const zipName = `scienceing-extension-lan-v${manifest.version}.zip`;
   const zipPath = join(DIST_DIR, zipName);
-  writeZip(zipPath, srcFiles.map((f) => ({ absPath: join(EXT_LAN_DIR, f.relPath.replace(/\//g, '\\')), relPath: f.relPath })));
+  writeZip(zipPath, entries);
   log(`扩展 LAN 版已打包：${zipPath}`);
+
+  // 2) 看板下载包：固定文件名落到前端静态目录，网关（nginx/node）直接托管。
+  //    构建走「暂存目录 → 只覆盖不同步删除」，所以这里放的文件不会被后续构建清掉。
+  mkdirSync(WEB_DOWNLOADS_DIR, { recursive: true });
+  const downloadZip = join(WEB_DOWNLOADS_DIR, EXT_PACKAGE_ZIP);
+  writeZip(downloadZip, entries);
+  const meta = {
+    version: manifest.version,
+    fileName: EXT_PACKAGE_ZIP,
+    size: statSync(downloadZip).size,
+    downloadPath: `/downloads/${EXT_PACKAGE_ZIP}`,
+    updatedAt: new Date().toISOString(),
+    dashboardOrigin: lanOrigin,
+  };
+  writeFileSync(join(WEB_DOWNLOADS_DIR, EXT_PACKAGE_JSON), JSON.stringify(meta, null, 2) + '\n', 'utf8');
+
+  const downloadUrl = `${lanOrigin}${meta.downloadPath}`;
   log(`  · 看板/后端域：${lanOrigin}`);
+  log(`  · 下载入口：${downloadUrl}（v${meta.version}，${(meta.size / 1024).toFixed(0)} KB）`);
   log(`  · 已解压目录（可直接“加载已解压的扩展程序”）：${EXT_LAN_DIR}`);
-  return zipPath;
+  return { zipPath, downloadZip, downloadUrl, version: manifest.version, meta };
+}
+
+/**
+ * 读取扩展下载包元信息（apps/web/dist/downloads/extension.json）。
+ * 未打包时返回 { available: false }，供 status / 前端提示使用。
+ */
+function readExtensionPackage() {
+  const file = join(WEB_DOWNLOADS_DIR, EXT_PACKAGE_JSON);
+  if (!existsSync(file)) return { available: false };
+  try {
+    const meta = JSON.parse(readFileSync(file, 'utf8'));
+    return { available: existsSync(join(WEB_DOWNLOADS_DIR, EXT_PACKAGE_ZIP)), ...meta };
+  } catch {
+    return { available: false };
+  }
 }
 
 // ───────────────────────── 状态与信息 ─────────────────────────
@@ -341,12 +410,14 @@ async function waitHttp(url, timeoutMs = 25_000, stepMs = 500) {
   return last;
 }
 
-function makeUrls(lanIp, gatewayPort, backendPort) {  const origin = `http://${lanIp}:${gatewayPort}`;
+function makeUrls(lanIp, gatewayPort, backendPort) {
+  const origin = `http://${lanIp}:${gatewayPort}`;
   return {
     dashboard: `${origin}/`,
     my: `${origin}/my`,
     admin: `${origin}/admin`,
     api: `http://${lanIp}:${backendPort}/api`,
+    extension: `${origin}/downloads/${EXT_PACKAGE_ZIP}`,
   };
 }
 
@@ -386,6 +457,10 @@ async function cmdStatus() {
   console.log(`    管理后台 ${urls.admin}`);
   console.log(`    我的账号 ${urls.my}`);
   console.log(`    后端 API ${urls.api}`);
+  const pkg = readExtensionPackage();
+  console.log(pkg.available
+    ? `    扩展下载 ${urls.extension}（v${pkg.version}，${(pkg.size / 1024).toFixed(0)} KB，${pkg.updatedAt || '—'}）`
+    : `    扩展下载 （未打包，执行 deploy / extension:pack 后可用）`);
   console.log('');
   console.log(`  后端  ${results.backend.running ? `运行中（自检 ${results.backend.local ?? '?'}）` : '未运行'}`);
   if (results.gateway.running) {
@@ -425,11 +500,12 @@ async function fullDeploy({ nodeBin, cfg, backendPort, gatewayPort, lan }) {
   const mode = await startGateway({ nodeBin, cfg, gatewayPort, backendPort, lanIp: lan.ip });
 
   // 5) 扩展 LAN 版
-  const zipPath = await packLanExtension({ cfg, gatewayPort, lanIp: lan.ip, nodeBin });
+  const ext = await packLanExtension({ cfg, gatewayPort, lanIp: lan.ip, nodeBin });
 
   writeJson(join(RUN_DIR, 'state.json'), {
     mode, backendPort, gatewayPort, lanIp: lan.ip, startedAt: new Date().toISOString(),
-    deploySeconds: ((Date.now() - startedAt) / 1000).toFixed(1), zipPath,
+    deploySeconds: ((Date.now() - startedAt) / 1000).toFixed(1),
+    zipPath: ext?.zipPath, extensionDownloadUrl: ext?.downloadUrl, extensionVersion: ext?.version,
   });
   const urls = makeUrls(lan.ip, gatewayPort, backendPort);
 
@@ -440,7 +516,8 @@ async function fullDeploy({ nodeBin, cfg, backendPort, gatewayPort, lan }) {
   log(`    看板     ${urls.dashboard}`);
   log(`    管理后台 ${urls.admin}`);
   log(`    我的账号 ${urls.my}`);
-  if (zipPath) log(`  浏览器扩展 LAN 版：${zipPath}`);
+  if (ext?.downloadUrl) log(`  浏览器扩展下载：${ext.downloadUrl}（v${ext.version}，同事解压后“加载已解压的扩展程序”）`);
+  if (ext?.zipPath) log(`  版本化归档：${ext.zipPath}`);
   log('─'.repeat(60));
 }
 
@@ -516,7 +593,8 @@ async function cmdPackExt(argv) {
   const rt = await resolveRuntime();
   const zip = await packLanExtension({ cfg: rt.cfg, gatewayPort: rt.gatewayPort, lanIp: rt.lan.ip, nodeBin: rt.nodeBin });
   if (!zip) die('未生成 zip（检查 PACK_LAN_EXTENSION / LAN_IP）');
-  console.log(`OK: ${zip}`);
+  console.log(`OK: ${zip.zipPath}`);
+  console.log(`下载入口: ${zip.downloadUrl}`);
 }
 
 async function cmdResetAdmin(argv) {

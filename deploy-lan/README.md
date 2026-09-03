@@ -53,7 +53,12 @@ deploy-lan/
 ├── extension-lan/          浏览器扩展 LAN 版（已把域名替换为 http://<IP>:<网关端口>，
 │                           可直接“加载已解压的扩展程序”，也可用 dist 里的 zip 分发）
 ├── dist/
-│   └── scienceing-extension-lan-v1.0.0.zip   可分发/右键安装的扩展压缩包
+│   └── scienceing-extension-lan-v1.0.0.zip   可分发/右键安装的扩展压缩包（版本化归档）
+│
+└── （构建/部署时同步生成，位于前端静态目录，由网关托管）
+    apps/web/dist/downloads/
+    ├── scienceing-extension.zip    固定文件名：看板「下载助手」入口始终指向它
+    └── extension.json              包元信息（版本/大小/更新时间/看板域）
 └── run/                    运行状态：backend.pid/backend.log/gateway*.pid/*.log/
                             state.json/deploy.log（排查一律看这里）
 ```
@@ -109,8 +114,12 @@ deploy-lan/
 1. 同事电脑连接同一 WiFi，浏览器打开 `http://10.3.124.100:18080/` → 应看到账号池看板，可用账号数正常。
 2. 直接访问 `http://10.3.124.100:18080/admin/accounts` **并刷新** → 不应 404（SPA 回退生效）。
 3. 用 admin 登录管理后台 → 五页（账号/用户/租约/日志/设置）可访问。
-4. 要使用“领取/归还 + 科应页悬浮窗”，同事需装扩展：把
-   `deploy-lan\dist\scienceing-extension-lan-v1.0.0.zip` 发给同事解压，Chrome/Edge 打开 `chrome://extensions`（Edge 为 `edge://extensions`）→ 开启“开发者模式”→“加载已解压的扩展程序”→ 选择解压目录（内含 manifest.json 的目录）。
+4. 要使用“领取/归还 + 科应页悬浮窗”，同事需装扩展，二选一：
+   - **看板自助下载（推荐）**：同事打开看板，点顶栏助手状态旁的下载图标；管理员也可在
+     「管理后台 → 系统参数 → 扩展配置」点「下载最新版 ZIP」（显示版本/大小/更新时间）。
+     入口即 `http://<本机IP>:18080/downloads/scienceing-extension.zip`，内容就是下面的 LAN 版包。
+   - 手动分发：把 `deploy-lan\dist\scienceing-extension-lan-v1.0.0.zip` 发给同事解压。
+   解压后 Chrome/Edge 打开 `chrome://extensions`（Edge 为 `edge://extensions`）→ 开启“开发者模式”→“加载已解压的扩展程序”→ 选择解压目录（内含 manifest.json 的目录）。
 5. （可选）把 `deploy-lan/extension-lan` 目录整体拷给同事直接加载亦可（无需解压）。
 6. 若同事打不开：先自查（status.bat）网关/后端是否运行；再按 6.2 排查（AP 隔离、网段、防火墙）。
 
@@ -179,6 +188,10 @@ Worker 凭据**只走环境变量**（已配在仓库根 `.env`）：
 | 前端能开但接口报错 | 看网关日志；确认后端 3000 存活（`status.bat`） |
 | 扩展装了没反应 | 确认同事装的是 `extension-lan` 版（域名已含本机 IP:18080），
 |  | 且访问的正是该地址；`chrome://extensions` 里点“重新加载” |
+| 点「下载最新版 ZIP」是灰的 / 下载 404 | 包未生成：`node deploy-lan/scripts/deploy.mjs extension:pack`（或重新 deploy）。
+|  | LAN IP 变更后**必须重新打包**，否则包里的看板域还是旧 IP |
+| 构建报 `EPERM ... .woff` | 已规避：前端先构建到 `apps/web/dist-build` 再同步进 `dist`。
+|  | 若仍出现，停掉网关后重跑；产物以 `dist/index.html` 引用的 hash 名为准 |
 | 想换回 dev 模式 | dev 与生产互不冲突：dev 用 5173/3000，生产网关 18080（若 dev 也要 3000，先 `stop.bat`） |
 
 ## 9. 一键脚本与 CLI 速查

@@ -27,6 +27,9 @@ export const APP_WEB = join(REPO_ROOT, 'apps', 'web');
 export const APP_EXTENSION = join(REPO_ROOT, 'apps', 'extension');
 export const WORKER_DIR = join(REPO_ROOT, 'playwright', 'worker');
 export const WEB_DIST = join(APP_WEB, 'dist');
+export const WEB_DOWNLOADS_DIR = join(WEB_DIST, 'downloads');   // 前端静态下载目录（扩展 zip 落这里，由网关直接托管）
+export const EXT_PACKAGE_ZIP = 'scienceing-extension.zip';      // 固定文件名：看板下载入口始终指向它
+export const EXT_PACKAGE_JSON = 'extension.json';               // 包元信息：版本/大小/更新时间
 export const DATA_DIR = join(REPO_ROOT, 'data');
 export const DB_FILE = join(DATA_DIR, 'scienceing.db');
 

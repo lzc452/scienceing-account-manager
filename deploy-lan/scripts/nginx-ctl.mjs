@@ -77,6 +77,16 @@ http {
             proxy_read_timeout 180s;
         }
 
+        # 扩展分发：/downloads/scienceing-extension.zip（部署时由 extension:pack 生成）
+        # 缺失必须 404，不能走 SPA 回退，否则用户会下载到 index.html。
+        location /downloads/ {
+            try_files $uri =404;
+            location ~ \.zip$ {
+                default_type application/zip;
+                add_header Content-Disposition 'attachment';
+            }
+        }
+
         # 静态资源长缓存
         location /assets/ {
             root ${webDist.replace(/\\/g, '/')};

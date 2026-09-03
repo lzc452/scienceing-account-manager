@@ -5,7 +5,7 @@ import { LogOut } from 'lucide-vue-next'
 import Button from '@/components/ui/Button.vue'
 import Dialog from '@/components/ui/Dialog.vue'
 import PluginChip from '@/components/PluginChip.vue'
-import { authState, detectExtension, isLoggedIn, logout, pluginState } from '@/api'
+import { authState, detectExtension, downloadExtensionZip, isLoggedIn, loadExtensionPackage, logout, pluginState } from '@/api'
 
 /**
  * 公开布局（首页 / 我的账号）
@@ -32,6 +32,8 @@ onMounted(() => {
   // 显示authState.user
   console.log('authState.user:', authState.user)
   detectExtension()
+  // 扩展下载包元信息（版本/更新时间），仅供展示，失败不影响下载入口
+  loadExtensionPackage()
 })
 
 async function onLogout() {
@@ -64,6 +66,7 @@ function confirmLogout() {
           :version="pluginState.version"
           :min-version="pluginState.minimumVersion"
           class="hidden sm:flex"
+          @download="downloadExtensionZip"
         />
 
         <div class="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
