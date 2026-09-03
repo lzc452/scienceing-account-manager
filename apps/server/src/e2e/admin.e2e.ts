@@ -108,31 +108,42 @@ test('force-release / reset-password / mark-available / disable 集成', async (
 });
 
 test('leases / logs / settings / extension config 端点', async () => {
-  const leases = await request(app.getHttpServer()).get('/api/admin/leases').set('Authorization', `Bearer ${adminToken}`);
+  // 租约记录：后端分页形状 { items, total, page, pageSize } + status 过滤
+  const leases = await request(app.getHttpServer())
+    .get('/api/admin/leases?page=1&pageSize=5')
+    .set('Authorization', `Bearer ${adminToken}`);
   assert.equal(leases.status, 200);
-  assert.ok(Array.isArray(leases.body));
+  assert.ok(Array.isArray(leases.body.items));
+  assert.equal(typeof leases.body.total, 'number');
+  assert.equal(leases.body.page, 1);
+  assert.ok(leases.body.items.length <= 5);
 
   const logs = await request(app.getHttpServer()).get('/api/admin/logs').set('Authorization', `Bearer ${adminToken}`);
   assert.equal(logs.status, 200);
   assert.ok(Array.isArray(logs.body.items));
   assert.ok(logs.body.total >= 0);
+  // 动作中文名下发
+  if (logs.body.items.length > 0) {
+    assert.equal(typeof logs.body.items[0].actionLabel, 'string');
+  }
 
   const settings = await request(app.getHttpServer()).get('/api/admin/settings').set('Authorization', `Bearer ${adminToken}`);
   assert.equal(settings.status, 200);
-  assert.equal(settings.body.inactivity_timeout_seconds, '1800');
+  assert.equal(settings.body.inactivity_timeout_minutes, '30');
 
+  // 更新为 20 分钟 → extension config 应按 20*60=1200 秒下发
   const upd = await request(app.getHttpServer())
     .post('/api/admin/settings')
     .set('Authorization', `Bearer ${adminToken}`)
-    .send({ inactivity_timeout_seconds: '1200' });
+    .send({ inactivity_timeout_minutes: '20' });
   assert.equal(upd.status, 201);
-  assert.equal(upd.body.inactivity_timeout_seconds, '1200');
+  assert.equal(upd.body.inactivity_timeout_minutes, '20');
 
   const ext = await request(app.getHttpServer()).get('/api/extension/config');
   assert.equal(ext.status, 200);
   assert.equal(ext.body.minimumVersion, '1.0.0');
   assert.equal(typeof ext.body.activityThrottleSeconds, 'number');
-  // 无操作超时跟随上面 PUT 的 1200 实时下发（扩展悬浮窗环满刻度据此适配）
+  // 无操作超时分钟×60 实时下发（扩展悬浮窗环满刻度据此适配，协议保持秒）
   assert.equal(ext.body.inactivityTimeoutSeconds, 1200);
 });
 

@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common';
-import { AdminService, type AdminAccountView, type AdminLeaseView } from './admin.service';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { AdminService, type AdminAccountView } from './admin.service';
 import { AuthGuard } from '../../guards/auth.guard';
 import { AdminGuard } from '../../guards/admin.guard';
 import { CurrentUser } from '../../guards/current-user.decorator';
@@ -34,8 +34,16 @@ export class AdminController {
   }
 
   @Get('leases')
-  leases(): AdminLeaseView[] {
-    return this.adminService.listLeases();
+  leases(
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.adminService.listLeases({
+      status: status && status !== 'all' ? status : undefined,
+      page: page ? Number(page) : undefined,
+      pageSize: pageSize ? Number(pageSize) : undefined,
+    });
   }
 
   /** 修改账号名称（对应科应平台账号） */

@@ -16,7 +16,8 @@ export interface AccountPoolItem {
   estimatedReleaseAt: string | null;
 }
 
-const DEFAULT_INACTIVITY_TIMEOUT_SECONDS = 1800;
+/** 无操作超时默认 30 分钟（配置单位为分钟，见 system_settings.inactivity_timeout_minutes） */
+const DEFAULT_INACTIVITY_TIMEOUT_MINUTES = 30;
 
 @Injectable()
 export class AccountsService {
@@ -72,16 +73,17 @@ export class AccountsService {
     });
   }
 
+  /** 无操作超时（秒）：配置按分钟存（inactivity_timeout_minutes），此处换算成秒。 */
   private inactivityTimeoutSeconds(): number {
     const row = this.dbService.db
       .prepare('SELECT value FROM system_settings WHERE key = ?')
-      .get('inactivity_timeout_seconds') as unknown as { value: string } | undefined;
+      .get('inactivity_timeout_minutes') as unknown as { value: string } | undefined;
     if (row) {
-      const seconds = Number(row.value);
-      if (Number.isFinite(seconds) && seconds > 0) {
-        return seconds;
+      const minutes = Number(row.value);
+      if (Number.isFinite(minutes) && minutes > 0) {
+        return Math.round(minutes * 60);
       }
     }
-    return DEFAULT_INACTIVITY_TIMEOUT_SECONDS;
+    return DEFAULT_INACTIVITY_TIMEOUT_MINUTES * 60;
   }
 }

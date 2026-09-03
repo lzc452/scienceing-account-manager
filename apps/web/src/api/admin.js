@@ -85,8 +85,13 @@ export function updateUser(userId, dto) {
   return USE_MOCK ? adminMockApi.updateUser(userId, dto) : http('PATCH', `/admin/users/${userId}`, dto)
 }
 
-export function getAdminLeases() {
-  return USE_MOCK ? adminMockApi.listLeases() : http('GET', '/admin/leases')
+export function getAdminLeases(params) {
+  if (USE_MOCK) return adminMockApi.listLeases(params)
+  const qs = new URLSearchParams()
+  if (params?.status && params.status !== 'all') qs.set('status', params.status)
+  if (params?.page) qs.set('page', String(params.page))
+  if (params?.pageSize) qs.set('pageSize', String(params.pageSize))
+  return http('GET', `/admin/leases?${qs.toString()}`)
 }
 
 export function getAdminLogs(params) {

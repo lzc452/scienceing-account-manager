@@ -116,4 +116,19 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
     `,
   },
+  {
+    version: 3,
+    name: 'settings_inactivity_minutes',
+    // 无操作超时配置单位 秒→分钟（2026-09-03）：旧键 inactivity_timeout_seconds 的值按
+    // 60s 取整换算成分钟写入新键 inactivity_timeout_minutes，随后清理旧键。
+    // 小于 1 分钟的旧值（<60s）统一置 1 分钟，非法值直接删除（运行时回退默认 30 分钟）。
+    sql: `
+      UPDATE system_settings
+      SET key = 'inactivity_timeout_minutes',
+          value = CAST(MAX(1, ROUND(CAST(value AS REAL) / 60.0)) AS INTEGER)
+      WHERE key = 'inactivity_timeout_seconds' AND CAST(value AS REAL) > 0;
+
+      DELETE FROM system_settings WHERE key = 'inactivity_timeout_seconds';
+    `,
+  },
 ];

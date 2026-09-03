@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import AdminLayout from '@/layouts/AdminLayout.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -13,6 +13,8 @@ import TableHead from '@/components/ui/TableHead.vue'
 import TableHeader from '@/components/ui/TableHeader.vue'
 import TableRow from '@/components/ui/TableRow.vue'
 import { getAdminLeases } from '@/api/admin'
+
+const PAGE_SIZE = 10
 
 const FILTER_OPTIONS = [
   { value: 'all', label: '全部' },
@@ -28,27 +30,55 @@ const RELEASE_REASON_META = {
 }
 
 const loading = ref(true)
+const pending = ref(false)
 const error = ref('')
-const leases = ref([])
+const items = ref([])
+const total = ref(0)
 const filter = ref('all')
+const page = ref(1)
 
-const filtered = computed(() => {
-  if (filter.value === 'all') return leases.value
-  return leases.value.filter((l) => l.status === filter.value)
-})
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
-async function load() {
+async function load(opts = {}) {
+  if (opts.silent) pending.value = true
+  else loading.value = true
   try {
-    leases.value = await getAdminLeases()
+    // 状态过滤与分页都在后端完成（GET /admin/leases?status=&page=&pageSize=）
+    const res = await getAdminLeases({ status: filter.value, page: page.value, pageSize: PAGE_SIZE })
+    items.value = res.items || []
+    total.value = res.total ?? 0
     error.value = ''
   } catch (e) {
     error.value = e?.message || '加载失败'
+    items.value = []
+    total.value = 0
   } finally {
     loading.value = false
+    pending.value = false
+  }
+}
+
+function goPrev() {
+  if (page.value > 1) {
+    page.value -= 1
+    load({ silent: true })
+  }
+}
+
+function goNext() {
+  if (page.value < totalPages.value) {
+    page.value += 1
+    load({ silent: true })
   }
 }
 
 onMounted(load)
+
+// 状态筛选变化 → 回到第 1 页，由后端重新过滤
+watch(filter, () => {
+  page.value = 1
+  load()
+})
 
 function formatDate(iso) {
   if (!iso) return '—'
@@ -105,8 +135,13 @@ function reasonMeta(reason) {
                 </TableCell>
               </TableRow>
             </template>
+            <template v-else-if="items.length === 0">
+              <TableRow>
+                <TableCell colspan="6" class="py-6 text-center text-mid-gray">暂无租约记录</TableCell>
+              </TableRow>
+            </template>
             <template v-else>
-              <TableRow v-for="lease in filtered" :key="lease.id">
+              <TableRow v-for="lease in items" :key="lease.id">
                 <!--
                   进行中的租约用首列左侧 2px ink 竖条标记。
                   标记放在单元格而非 <tr> 上：border-collapse 下 tr 边框渲染不可靠；
@@ -142,7 +177,15 @@ function reasonMeta(reason) {
         </Table>
       </Card>
 
-      <p class="text-xs text-mid-gray">共 {{ filtered.length }} 条</p>
+      <!-- 分页条：窄屏换行居中，后端分页（与日志页一致） -->
+      <div class="flex flex-wrap items-center justify-between gap-3 text-xs text-mid-gray">
+        <span>共 {{ total }} 条</span>
+        <div class="flex items-center gap-2">
+          <Button variant="outline" size="sm" :disabled="page <= 1 || pending" @click="goPrev">上一页</Button>
+          <span class="tabular-nums">{{ page }} / {{ totalPages }}</span>
+          <Button variant="outline" size="sm" :disabled="page >= totalPages || pending" @click="goNext">下一页</Button>
+        </div>
+      </div>
     </div>
   </AdminLayout>
 </template>

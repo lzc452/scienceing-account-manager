@@ -17,13 +17,14 @@ const checking = ref(false)
 
 /** 租约规则表单元数据：驱动 v-for 渲染，保证三条规则的响应式行为完全一致 */
 const RULES = [
-  { key: 'inactivity_timeout_seconds', label: '无操作超时（秒）' },
+  // 无操作超时以「分钟」为单位（2026-09-03 起，原秒；后端换算成秒做回收判定/倒计时下发）
+  { key: 'inactivity_timeout_minutes', label: '无操作超时（分钟）' },
   { key: 'warning_seconds', label: '即将释放提醒（秒）' },
   { key: 'critical_warning_seconds', label: '临界提醒（秒）' },
 ]
 
 const leaseRules = ref({
-  inactivity_timeout_seconds: '1800',
+  inactivity_timeout_minutes: '30',
   warning_seconds: '300',
   critical_warning_seconds: '60',
 })
@@ -37,7 +38,7 @@ async function load() {
   try {
     const [settings, ext] = await Promise.all([getSettings(), getExtensionConfig()])
     leaseRules.value = {
-      inactivity_timeout_seconds: settings.inactivity_timeout_seconds ?? '1800',
+      inactivity_timeout_minutes: settings.inactivity_timeout_minutes ?? '30',
       warning_seconds: settings.warning_seconds ?? '300',
       critical_warning_seconds: settings.critical_warning_seconds ?? '60',
     }

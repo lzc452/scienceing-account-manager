@@ -93,7 +93,7 @@ export async function waitPort(port, timeoutMs, host = '127.0.0.1') {
   return false;
 }
 
-/** 极简 .env 解析（# 注释 / export 前缀 / 单双引号 / BOM），与 scripts/dev.mjs 行为一致。 */
+/** 极简 .env 解析：支持 # 注释（含行内注释）、export 前缀、单双引号、去 BOM。 */
 export function parseEnvFile(content) {
   const result = {};
   for (const rawLine of content.replace(/^\uFEFF/, '').split(/\r?\n/)) {
@@ -101,7 +101,14 @@ export function parseEnvFile(content) {
     if (!line || line.startsWith('#')) continue;
     const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
     if (!m) continue;
-    result[m[1]] = m[2].trim().replace(/^['"]|['"]$/g, '');
+    let v = m[2].trim();
+    // 引号包裹：整体取值（引号内允许 # / 空格）；否则剥离行内注释（从「空格+#」起）
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+      v = v.slice(1, -1);
+    } else {
+      v = v.split(/\s+#/)[0].trim();
+    }
+    result[m[1]] = v;
   }
   return result;
 }

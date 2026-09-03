@@ -15,7 +15,8 @@ import { nowIso } from '../../db/config';
 import { isVersionAtLeast } from '../../lib/version';
 import type { AccountCredentialsView, AccountRow, LeaseRow, LeaseView } from './leases.types';
 
-const DEFAULT_INACTIVITY_TIMEOUT_SECONDS = 1800;
+/** 无操作超时默认 30 分钟（配置单位为分钟，见 system_settings.inactivity_timeout_minutes） */
+const DEFAULT_INACTIVITY_TIMEOUT_MINUTES = 30;
 const DEFAULT_MIN_EXTENSION_VERSION = '1.0.0';
 
 @Injectable()
@@ -335,6 +336,7 @@ export class LeasesService {
       releaseReason: lease.release_reason,
       expiresAt: new Date(expiresAtMs).toISOString(),
       remainingSeconds: Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000)),
+      timeoutSeconds: timeoutSeconds,
     };
   }
 
@@ -374,16 +376,20 @@ export class LeasesService {
     }
   }
 
+  /**
+   * 无操作超时（秒）：配置按「分钟」存于 inactivity_timeout_minutes（2026-09-03 起，
+   * 原 inactivity_timeout_seconds 已由迁移 v3 换算），此处换算成秒供超时判定/expiresAt 使用。
+   */
   private inactivityTimeoutSeconds(): number {
     const row = this.dbService.db
       .prepare('SELECT value FROM system_settings WHERE key = ?')
-      .get('inactivity_timeout_seconds') as unknown as { value: string } | undefined;
+      .get('inactivity_timeout_minutes') as unknown as { value: string } | undefined;
     if (row) {
-      const seconds = Number(row.value);
-      if (Number.isFinite(seconds) && seconds > 0) {
-        return seconds;
+      const minutes = Number(row.value);
+      if (Number.isFinite(minutes) && minutes > 0) {
+        return Math.round(minutes * 60);
       }
     }
-    return DEFAULT_INACTIVITY_TIMEOUT_SECONDS;
+    return DEFAULT_INACTIVITY_TIMEOUT_MINUTES * 60;
   }
 }

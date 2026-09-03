@@ -153,6 +153,7 @@ async function claim(extensionVersion) {
     lastActivityAt: now,
     expiresAt: isoFromNow(INACTIVITY_TIMEOUT_SECONDS),
     remainingSeconds: INACTIVITY_TIMEOUT_SECONDS,
+    timeoutSeconds: INACTIVITY_TIMEOUT_SECONDS, // 进度条满刻度（与后端 LeaseView 同形）
     releaseRequestedAt: null,
     releasedAt: null,
     releaseReason: null,

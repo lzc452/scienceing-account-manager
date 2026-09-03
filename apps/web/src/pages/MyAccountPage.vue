@@ -16,7 +16,10 @@ import { Check, Copy } from 'lucide-vue-next'
 import { downloadExtensionZip, formatDuration, getCurrentLease, pluginState, releaseLease } from '@/api'
 import { toStatusKind } from '@/lib/status'
 
-const INACTIVITY_TIMEOUT_SECONDS = 1800
+// 进度条满刻度 = 后端下发的无操作超时租期（lease.timeoutSeconds），不再本地硬编码 30 分钟：
+// 管理员把超时改为 10 分钟时，进度条必须按 10 分钟满刻度从头递减，而不是显示在旧 30min 刻度的 2/3 处。
+// 兜底 1800 仅在后端未返回该字段（旧版本/异常）时使用。
+const FALLBACK_TIMEOUT_SECONDS = 1800
 
 const router = useRouter()
 
@@ -87,8 +90,10 @@ function onExtensionAck(event) {
 
 const progress = computed(() => {
   if (!lease.value) return 0
-  const remaining = Math.max(0, lease.value.remainingSeconds ?? 0)
-  return Math.min(100, Math.round(((INACTIVITY_TIMEOUT_SECONDS - remaining) / INACTIVITY_TIMEOUT_SECONDS) * 100))
+  const total = Math.max(1, lease.value.timeoutSeconds ?? FALLBACK_TIMEOUT_SECONDS)
+  const remaining = Math.max(0, Math.min(total, lease.value.remainingSeconds ?? 0))
+  // 租期已用比例 =（满刻度 - 剩余）/ 满刻度：领取后从 0% 起跑，归零时 100% 自动释放
+  return Math.min(100, Math.round(((total - remaining) / total) * 100))
 })
 
 function relativeTime(iso) {

@@ -44,7 +44,8 @@ export const USER_ROLE = {
 
 /** 系统设置默认值（与 @scienceing/shared DEFAULT_SYSTEM_SETTINGS 一致，PRD §39/§40） */
 export const DEFAULT_SYSTEM_SETTINGS: Record<string, string> = {
-  inactivity_timeout_seconds: '1800',
+  // 无操作超时以「分钟」为单位配置（2026-09-03 起，原先为秒）；后端内部换算成秒做超时判定。
+  inactivity_timeout_minutes: '30',
   warning_seconds: '300',
   critical_warning_seconds: '60',
   activity_throttle_seconds: '5',
@@ -84,3 +85,33 @@ export const AUDIT_RESULT = {
   SUCCESS: 'SUCCESS',
   FAILED: 'FAILED',
 } as const;
+
+/**
+ * 审计动作中文名（展示层映射，供 GET /admin/logs 输出 actionLabel）。
+ * 与 AUDIT_ACTION 键一一对应；新增动作须在此补全，否则前端兜底显示英文。
+ */
+export const AUDIT_ACTION_LABEL: Record<string, string> = {
+  LOGIN: '登录',
+  LOGOUT: '退出登录',
+  USER_CREATE: '新增用户',
+  USER_UPDATE: '修改用户',
+  USER_PASSWORD_RESET: '重置用户密码',
+  USER_BULK_CREATE: '批量导入用户',
+  CLAIM_ACCOUNT: '领取账号',
+  ACTIVITY: '活跃上报',
+  RELEASE: '归还账号',
+  TIMEOUT: '超时回收',
+  RESET_PASSWORD: '发起改密',
+  RESET_SUCCESS: '改密成功',
+  RESET_FAILED: '改密失败',
+  ADMIN_FORCE_RELEASE: '强制回收',
+  ADMIN_MANUAL_FIX: '人工修复完成',
+  ACCOUNT_DISABLE: '停用账号',
+  ACCOUNT_ENABLE: '启用账号',
+  ACCOUNT_CREATE: '新增科应账号',
+  ACCOUNT_DELETE: '删除科应账号',
+  ACCOUNT_BULK_CREATE: '批量导入科应账号',
+  ACCOUNT_RENAME: '修改科应账号',
+  SETTING_UPDATE: '参数更新',
+  PASSWORD_DECRYPT_FAILED: '密码解密失败',
+};

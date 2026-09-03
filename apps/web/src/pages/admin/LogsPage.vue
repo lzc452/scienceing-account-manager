@@ -14,25 +14,14 @@ import TableHead from '@/components/ui/TableHead.vue'
 import TableHeader from '@/components/ui/TableHeader.vue'
 import TableRow from '@/components/ui/TableRow.vue'
 import { getAdminLogs } from '@/api/admin'
+import { ACTION_LABELS, actionLabelOf } from '@/lib/audit-labels'
 
 const PAGE_SIZE = 10
 
-const ACTION_OPTIONS = [
-  { value: 'all', label: '全部' },
-  { value: 'LOGIN', label: 'LOGIN' },
-  { value: 'CLAIM_ACCOUNT', label: 'CLAIM_ACCOUNT' },
-  { value: 'ACTIVITY', label: 'ACTIVITY' },
-  { value: 'RELEASE', label: 'RELEASE' },
-  { value: 'TIMEOUT', label: 'TIMEOUT' },
-  { value: 'RESET_PASSWORD', label: 'RESET_PASSWORD' },
-  { value: 'RESET_SUCCESS', label: 'RESET_SUCCESS' },
-  { value: 'RESET_FAILED', label: 'RESET_FAILED' },
-  { value: 'ADMIN_FORCE_RELEASE', label: 'ADMIN_FORCE_RELEASE' },
-  { value: 'ADMIN_MANUAL_FIX', label: 'ADMIN_MANUAL_FIX' },
-  { value: 'SETTING_UPDATE', label: 'SETTING_UPDATE' },
-]
-
-const USER_NAMES = { 1: 'admin', 2: '张三', 3: '李四', 4: '王五' }
+/** 筛选下拉：全量审计动作（英文 value + 中文 label），与后端 AUDIT_ACTION 全集对齐 */
+const ACTION_OPTIONS = [{ value: 'all', label: '全部' }].concat(
+  Object.entries(ACTION_LABELS).map(([value, label]) => ({ value, label })),
+)
 
 const loading = ref(true) // 初次加载 / 筛选变更 → 骨架屏
 const pending = ref(false) // 翻页请求中 → 禁用按钮并保留当前行
@@ -100,9 +89,11 @@ function formatDate(iso) {
   return `${mm}-${dd} ${hh}:${mi}:${ss}`
 }
 
-function userName(id) {
-  if (id == null) return '系统'
-  return USER_NAMES[id] || `#${id}`
+// 用户列：优先 users.display_name（后端 JOIN 返回），其次 username，未知 id 兜底 #id。
+// 系统动作（定时回收/自动任务）user_id 为 null → 显示「系统」。
+function userLabel(log) {
+  if (log.userId == null) return '系统'
+  return log.userDisplayName || log.userUsername || `#${log.userId}`
 }
 
 function resultMeta(result) {
@@ -167,13 +158,15 @@ function resultMeta(result) {
             <template v-else>
               <TableRow v-for="log in items" :key="log.id">
                 <TableCell class="tabular-nums text-mid-gray">{{ formatDate(log.createdAt) }}</TableCell>
-                <TableCell class="font-medium">{{ log.action }}</TableCell>
+                <TableCell>
+                  <span :title="log.action" class="font-medium">{{ actionLabelOf(log.action, log.actionLabel) }}</span>
+                </TableCell>
                 <TableCell>
                   <Badge :variant="resultMeta(log.result).variant">
                     {{ resultMeta(log.result).label }}
                   </Badge>
                 </TableCell>
-                <TableCell>{{ userName(log.userId) }}</TableCell>
+                <TableCell>{{ userLabel(log) }}</TableCell>
                 <TableCell class="tabular-nums text-mid-gray">{{ log.ip || '—' }}</TableCell>
               </TableRow>
             </template>

@@ -108,28 +108,54 @@ export class AdminService {
     }));
   }
 
-  listLeases(): AdminLeaseView[] {
+  /**
+   * 租约记录（后端分页，PRD 管理页）：支持 status 过滤 + page/pageSize，
+   * 返回 { items, total, page, pageSize }（与 GET /admin/logs 分页形状一致）。
+   */
+  listLeases(query: { status?: string; page?: number; pageSize?: number }): {
+    items: AdminLeaseView[];
+    total: number;
+    page: number;
+    pageSize: number;
+  } {
+    const page = Math.max(1, query.page ?? 1);
+    const pageSize = Math.min(100, Math.max(1, query.pageSize ?? 20));
+    const conditions: string[] = [];
+    const params: Array<string | number> = [];
+    if (query.status) {
+      conditions.push('l.status = ?');
+      params.push(query.status);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const from = `FROM leases l JOIN users u ON u.id = l.user_id JOIN scienceing_accounts a ON a.id = l.account_id ${where}`;
+
+    const total = this.dbService.db
+      .prepare(`SELECT COUNT(*) AS c ${from}`)
+      .get(...params) as unknown as { c: number };
     const rows = this.dbService.db
       .prepare(
         `SELECT l.id, l.status, l.started_at, l.last_activity_at, l.released_at, l.release_reason,
                 u.display_name AS user_display, a.code AS account_code
-         FROM leases l
-         JOIN users u ON u.id = l.user_id
-         JOIN scienceing_accounts a ON a.id = l.account_id
-         ORDER BY l.id DESC`,
+         ${from}
+         ORDER BY l.id DESC LIMIT ? OFFSET ?`,
       )
-      .all() as unknown as LeaseListRow[];
+      .all(...params, pageSize, (page - 1) * pageSize) as unknown as LeaseListRow[];
 
-    return rows.map((row) => ({
-      id: row.id,
-      userDisplayName: row.user_display,
-      accountCode: row.account_code,
-      status: row.status,
-      startedAt: row.started_at,
-      lastActivityAt: row.last_activity_at,
-      releasedAt: row.released_at,
-      releaseReason: row.release_reason,
-    }));
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        userDisplayName: row.user_display,
+        accountCode: row.account_code,
+        status: row.status,
+        startedAt: row.started_at,
+        lastActivityAt: row.last_activity_at,
+        releasedAt: row.released_at,
+        releaseReason: row.release_reason,
+      })),
+      total: total.c,
+      page,
+      pageSize,
+    };
   }
 
   /** 强制回收（幂等）：有 ACTIVE lease 才回收；否则返回当前状态（PRD §52）。 */

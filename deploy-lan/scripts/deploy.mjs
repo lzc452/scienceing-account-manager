@@ -44,14 +44,31 @@ async function resolveRuntime() {
     log('  然后用编辑器打开 .env 填写科应凭据后重新部署（详见 README「新电脑首次部署」）。');
   }
   const cfg = loadConfig();
-  const backendPort = Number(readEnvFile(ENV_FILE).PORT || process.env.PORT || BACKEND_DEFAULT_PORT);
-  const gatewayPort = Number(cfg.GATEWAY_PORT || GATEWAY_DEFAULT_PORT);
+  const backendPort = toPort(readEnvFile(ENV_FILE).PORT ?? process.env.PORT ?? String(BACKEND_DEFAULT_PORT),
+    '仓库根 .env 的 PORT');
+  const gatewayPort = toPort(String(cfg.GATEWAY_PORT ?? '').trim() || String(GATEWAY_DEFAULT_PORT),
+    'deploy-lan/config.env 的 GATEWAY_PORT');
   let lan = null;
   const explicit = (cfg.LAN_IP || '').trim();
   if (explicit) lan = { ip: explicit, alias: 'manual' };
   else lan = await detectLanIp();
   if (!lan) die('未能自动探测局域网 IP，请在 deploy-lan/config.env 中手动设置 LAN_IP。');
   return { nodeBin, cfg, backendPort, gatewayPort, lan };
+}
+
+/** 解析端口：非 1~65535 整数时给出指向配置行的可读报错（常见：.env 编码损坏 / 行内带注释 / 值非数字）。 */
+function toPort(raw, label) {
+  const value = String(raw ?? '').trim();
+  const n = Number(value);
+  if (Number.isInteger(n) && n >= 1 && n <= 65535) return n;
+  die(
+    `端口配置无效（${label}）：解析到 ${JSON.stringify(value)}，不是合法端口号。\n` +
+    '  常见原因与修复：\n' +
+    '  ① .env 被记事本存成了 UTF-16/带 BOM（表现为值乱码/夹 NUL）→ 用 VS Code 打开，右下角选 UTF-8 后另存；\n' +
+    '  ② 行内带了注释或多余字符（如 PORT=3000 # 备注）→ 改成纯 PORT=3000；\n' +
+    '  ③ 有多行重复键 → 只保留一行。\n' +
+    '  修好后重跑：node deploy-lan/scripts/deploy.mjs deploy',
+  );
 }
 
 function cfgBool(v, def = false) {
@@ -629,6 +646,7 @@ async function cmdResetAdmin(argv) {
 async function cmdEnvInit() {
   const lines = [];
   const header = '# 科应共享账号管理平台 —— 部署环境变量（由 deploy.mjs env:init 生成/补全，已 gitignore）\n'
+    + '# 建议修改：ADMIN_INITIAL_PASSWORD(管理员密码)、SCIENCING_ADMIN_USERNAME/PASSWORD(科应 Worker 凭据)\n'
     + '# ⚠ SCIENCEING_MASTER_KEY 换值会导致已入库密码无法解密：要么沿用首次部署写入的值，要么删库重建（见 README FAQ）。\n';
   if (existsSync(ENV_FILE)) {
     const raw = readFileSync(ENV_FILE, 'utf8').replace(/^\uFEFF/, '');
@@ -646,10 +664,9 @@ async function cmdEnvInit() {
     SCIENCING_WORKER_CLI: 'playwright/worker/dist/cli.js',
   };
   const created = [];
-  const note = (k) => { if (!defaults[k]) return ''; return '  # 默认值，请按需修改'; };
   for (const [k, v] of Object.entries(defaults)) {
     if (have.has(k)) continue;
-    lines.push(`${k}=${v}${note(k)}`);
+    lines.push(`${k}=${v}`);
     created.push(k);
   }
   if (!have.has('SCIENCEING_MASTER_KEY')) {

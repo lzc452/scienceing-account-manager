@@ -102,9 +102,11 @@ export interface LeaseDto {
   releaseRequestedAt: IsoTimestamp | null;
   releasedAt: IsoTimestamp | null;
   releaseReason: ReleaseReason | null;
-  /** 预计释放时间（startedAt/lastActivityAt + inactivity_timeout_seconds） */
+  /** 预计释放时间（startedAt/lastActivityAt + 无操作超时分钟×60） */
   expiresAt: IsoTimestamp;
   remainingSeconds: number;
+  /** 无操作超时租期（秒，配置分钟数×60）——进度条/倒计时满刻度以此为准，勿本地硬编码。 */
+  timeoutSeconds: number;
 }
 
 export interface CreateLeaseResponse {
@@ -154,6 +156,8 @@ export interface ExtensionConfigDto {
   activityThrottleSeconds: number;
   warningSeconds: number;
   criticalWarningSeconds: number;
+  /** 无操作超时（秒）：管理端配置单位为分钟（inactivity_timeout_minutes），服务端换算后下发，悬浮窗环满刻度/倒计时以此为准 */
+  inactivityTimeoutSeconds: number;
   /** 浏览器扩展分发包（deploy-lan 部署时生成到 /downloads/scienceing-extension.zip） */
   package: ExtensionPackageDto;
 }

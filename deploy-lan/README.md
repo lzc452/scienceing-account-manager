@@ -182,6 +182,8 @@ Worker 凭据**只走环境变量**（已配在仓库根 `.env`）：
 
 | 现象 | 处理 |
 |---|---|
+| 部署机**没有 Chrome**、只有 Edge | 不用装 Chrome：`.env` 加 `SCIENCING_BROWSER_CHANNEL=msedge`（Worker 走系统 Edge）→ `deploy.mjs stop` → `deploy.mjs start` 生效；仅改 env 无需重新构建 |
+| 用 **GitHub Download ZIP** 部署到新电脑 | zip 不含 `.env`（无 `.git` 也 pull 不了）。首次跑 deploy 是在“空 env”状态：master key 每次重启漂移、admin 密码随机、Worker 凭据为空 → **能访问≠健康**，建议收敛一次：`stop` → 生成 `.env`（`env:init` 或手写模板）→ `del data\scienceing.db*` → `deploy`。以后更新=重新下载 zip 覆盖同目录（zip 不含 `.env`/`data`/`run`，不会覆盖它们；覆盖前建议备份 `data`）→ 跑 `deploy-update.bat` 或 `deploy.mjs deploy`（无 .git 时 `--pull` 会失败但会继续） |
 | 换新电脑/git clone 后没有 `.env` | `.env` 被 gitignore 不会同步。先 `node deploy-lan/scripts/deploy.mjs env:init` 生成模板（自动随机 master key、自动填 storage 路径）→ 用编辑器填 `SCIENCING_ADMIN_USERNAME/PASSWORD` → 若此前已 seed 过数据库，按下一行删库重建 |
 | 补/改了 `.env` 后要重新部署 | ① `deploy.mjs stop`；② 编辑 `.env`（**UTF-8 无 BOM**，别用记事本默认格式）；③ 若 `SCIENCEING_MASTER_KEY` 变了 → 删 `data\scienceing.db*`（否则旧密文解不开）；④ `deploy.mjs deploy`（migrate/seed 幂等 + 重启）；⑤ 若只改了 `ADMIN_INITIAL_PASSWORD`：seed 不覆盖已有 admin，补跑 `deploy.mjs db:reset-admin` |
 | 新电脑重部署后 admin 登不进 | 用 `env:init` 前那次跑过 seed 的话 admin 密码是当时**随机生成**的（看当时 seed 日志）；直接 `db:reset-admin` 重置为 `.env` 当前值 |

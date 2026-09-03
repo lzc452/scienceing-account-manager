@@ -1,4 +1,5 @@
 import { reactive } from 'vue'
+import { ACTION_LABELS } from '@/lib/audit-labels'
 
 /**
  * 管理后台内存 mock 后端（t8）。真实联调时由 admin.js 切到 fetch。
@@ -63,7 +64,8 @@ const state = reactive({
     { id: 1, userId: 1, accountId: null, leaseId: null, action: 'SETTING_UPDATE', result: 'SUCCESS', ip: '10.2.1.8', userAgent: null, metadata: { keys: ['warning_seconds'] }, createdAt: ago(3 * DAY) },
   ],
   settings: {
-    inactivity_timeout_seconds: '1800',
+    // 无操作超时以「分钟」为单位（与后端 system_settings.inactivity_timeout_minutes 一致）
+    inactivity_timeout_minutes: '30',
     warning_seconds: '300',
     critical_warning_seconds: '60',
     activity_throttle_seconds: '5',
@@ -262,14 +264,51 @@ async function bulkCreateUsers(users) {
   return { created, failed }
 }
 
-async function listLeases() {
+/**
+ * 租约记录 mock：后端分页形状 { items, total, page, pageSize }（与真实 /admin/leases 一致）。
+ * 手写样本只有 5 条，为便于验证翻页，首次调用时确定性补足到 24 条（幂等）。
+ */
+function ensureLeaseRows() {
+  const MIN_ROWS = 24
+  if (state.leases.length >= MIN_ROWS) return
+  const codes = ['KY-01', 'KY-02', 'KY-03', 'KY-04', 'KY-05']
+  const statusCycle = ['RELEASED', 'ACTIVE', 'RELEASED', 'RELEASED', 'FAILED', 'TIMEOUT']
+  const reasons = { RELEASED: 'USER_RETURN', FAILED: 'RESET_ERROR', TIMEOUT: 'INACTIVITY_TIMEOUT' }
+  let n = state.leases.length
+  while (state.leases.length < MIN_ROWS) {
+    n += 1
+    const user = state.users[(n % (state.users.length - 1)) + 1] // 张三/李四/王五 轮转（跳过 admin）
+    const status = statusCycle[n % statusCycle.length]
+    const releasedAt = status === 'RELEASED' || status === 'FAILED' || status === 'TIMEOUT' ? ago((n + 1) * 7 * HOUR) : null
+    state.leases.push({
+      id: 500 - n,
+      userDisplayName: user.displayName,
+      accountCode: codes[n % codes.length],
+      status: status === 'TIMEOUT' ? 'RELEASED' : status,
+      startedAt: ago(n * 7 * HOUR),
+      lastActivityAt: ago(n * 7 * HOUR - 40 * MIN),
+      releasedAt,
+      releaseReason: releasedAt ? reasons[status] ?? 'USER_RETURN' : null,
+    })
+  }
+}
+
+async function listLeases({ status, page = 1, pageSize = 20 } = {}) {
   await delay()
-  return state.leases.map((l) => ({ ...l }))
+  ensureLeaseRows()
+  let rows = state.leases.map((l) => ({ ...l }))
+  if (status && status !== 'all') rows = rows.filter((l) => l.status === status)
+  rows.sort((a, b) => b.id - a.id)
+  const total = rows.length
+  const items = rows.slice((page - 1) * pageSize, page * pageSize)
+  return { items, total, page, pageSize }
 }
 
 async function listLogs({ action, hideActivity, page = 1, pageSize = 20 } = {}) {
   await delay()
-  let rows = state.logs.map((l) => ({ ...l }))
+  // 与真实后端一致：audit 行只存 userId，用户列由 users 表解析出 displayName；动作下发 actionLabel 中文
+  const nameOf = (id) => (id == null ? null : state.users.find((u) => u.id === id)?.displayName ?? null)
+  let rows = state.logs.map((l) => ({ ...l, userDisplayName: nameOf(l.userId), actionLabel: ACTION_LABELS[l.action] ?? null }))
   if (action) rows = rows.filter((l) => l.action === action)
   if (hideActivity) rows = rows.filter((l) => l.action !== 'ACTIVITY')
   const total = rows.length
@@ -298,6 +337,8 @@ async function getExtensionConfig() {
     activityThrottleSeconds: Number(state.settings.activity_throttle_seconds),
     warningSeconds: Number(state.settings.warning_seconds),
     criticalWarningSeconds: Number(state.settings.critical_warning_seconds),
+    // 无操作超时（秒）：配置以分钟存储（inactivity_timeout_minutes），换算下发，与后端一致
+    inactivityTimeoutSeconds: Math.round(Number(state.settings.inactivity_timeout_minutes ?? 30) * 60),
     // 真实部署下由 deploy-lan 打包生成（apps/web/dist/downloads/extension.json）
     package: {
       available: true,
