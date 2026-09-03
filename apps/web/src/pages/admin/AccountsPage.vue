@@ -18,6 +18,9 @@ import TableHeader from '@/components/ui/TableHeader.vue'
 import TableRow from '@/components/ui/TableRow.vue'
 import { toast } from '@/components/ui/toast'
 import {
+  bulkCreateAccounts,
+  createAccount,
+  deleteAccount,
   disableAccount,
   enableAccount,
   forceRelease,
@@ -27,6 +30,7 @@ import {
   resetPassword,
 } from '@/api/admin'
 import { toStatusKind } from '@/lib/status'
+import { accountsCsvTemplate, parseAccountsCsv } from '@/lib/csv'
 
 const loading = ref(true)
 const error = ref('')
@@ -47,6 +51,108 @@ const accountOptions = computed(() =>
 )
 
 const errorAccounts = computed(() => accounts.value.filter((a) => a.status === 'ERROR'))
+
+// ---------------------------------------------------------------------------
+// 新增账号 / 删除账号 / CSV 导入（从首页账号池迁移至本页，功能一致）
+// ---------------------------------------------------------------------------
+const createOpen = ref(false)
+const createForm = ref({ code: '', username: '' })
+
+const deleteTarget = ref(null)
+const deleteOpen = ref(false)
+function confirmDelete(account) {
+  deleteTarget.value = account
+  deleteOpen.value = true
+}
+async function doDelete() {
+  if (!deleteTarget.value?.id) return
+  pending.value = true
+  try {
+    await deleteAccount(deleteTarget.value.id)
+    toast({ title: `已删除 ${deleteTarget.value.code}`, variant: 'success' })
+    deleteOpen.value = false
+    load()
+  } catch (e) {
+    toast({ title: e?.message || '删除失败', variant: 'destructive' })
+  } finally {
+    pending.value = false
+  }
+}
+
+async function saveCreate() {
+  if (!createForm.value.code.trim() || !createForm.value.username.trim()) return
+  pending.value = true
+  try {
+    await createAccount({ code: createForm.value.code.trim(), username: createForm.value.username.trim() })
+    toast({ title: `已新增 ${createForm.value.code}`, variant: 'success' })
+    createOpen.value = false
+    createForm.value = { code: '', username: '' }
+    load()
+  } catch (e) {
+    toast({ title: e?.message || '新增失败', variant: 'destructive' })
+  } finally {
+    pending.value = false
+  }
+}
+
+// CSV 导入（解析交互与用户导入一致：上传 → 预览 → 二次确认）
+const importOpen = ref(false)
+const importFileRef = ref(null)
+const importRows = ref([])
+const importFailed = ref([])
+
+function triggerImportFile() {
+  importFileRef.value?.click()
+}
+function downloadAccountTemplate() {
+  const blob = new Blob([accountsCsvTemplate()], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'accounts-template.csv'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+async function onImportFile(e) {
+  const file = e.target.files?.[0]
+  if (!file) return
+  const text = await file.text()
+  const { rows, headerErrors } = parseAccountsCsv(text)
+  if (headerErrors.length) {
+    toast({ title: headerErrors.join('；'), variant: 'destructive' })
+    importRows.value = []
+    importFailed.value = []
+  } else {
+    importRows.value = rows
+      .filter((r) => r.errors.length === 0)
+      .map((r) => ({ index: r.index, code: r.code, username: r.username }))
+    importFailed.value = rows
+      .filter((r) => r.errors.length > 0)
+      .map((r) => ({ index: r.index, code: r.code, username: r.username, errors: r.errors }))
+  }
+  e.target.value = ''
+}
+async function confirmImport() {
+  if (importRows.value.length === 0) return
+  pending.value = true
+  try {
+    const res = await bulkCreateAccounts(importRows.value.map((r) => ({ code: r.code, username: r.username })))
+    const created = res?.created ?? importRows.value.length
+    const failed = res?.failed ?? []
+    toast({
+      title: `已导入 ${created} 条${failed.length ? `，${failed.length} 条失败` : ''}`,
+      variant: failed.length ? 'default' : 'success',
+    })
+    importOpen.value = false
+    importRows.value = []
+    importFailed.value = []
+    load()
+  } catch (e) {
+    toast({ title: e?.message || '导入失败', variant: 'destructive' })
+  } finally {
+    pending.value = false
+  }
+}
 
 async function load() {
   try {
@@ -164,10 +270,16 @@ async function onFix(account) {
   <AdminLayout>
     <!-- 区块间距统一为 gap-6（= 24px），构成可预期的垂直节奏 -->
     <div class="flex flex-col gap-6">
-      <!-- 标题字号 20 → 24px 递进；min-w-0 防止长标题撑破容器 -->
-      <h1 class="text-xl font-semibold leading-7 tracking-normal text-ink sm:text-2xl sm:leading-8">
-        科应账号管理
-      </h1>
+      <!-- 标题 与「新增账号 / 导入 CSV」按钮 justify-between（自首页账号池迁移） -->
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <h1 class="text-xl font-semibold leading-7 tracking-normal text-ink sm:text-2xl sm:leading-8">
+          科应账号管理
+        </h1>
+        <div class="flex flex-wrap items-center gap-2">
+          <Button variant="outline" @click="importOpen = true">导入 CSV</Button>
+          <Button @click="createOpen = true">新增账号</Button>
+        </div>
+      </div>
 
       <!-- ERROR 账号置顶错误卡片 -->
       <div v-if="errorAccounts.length" class="flex flex-col gap-3">
@@ -218,13 +330,6 @@ async function onFix(account) {
                 <TableCell>
                   <div class="flex items-center gap-2">
                     <span class="text-mid-gray">{{ account.username }}</span>
-                    <button
-                      type="button"
-                      class="rounded-2xl px-1.5 py-0.5 text-xs text-mid-gray transition-colors hover:bg-surface-alt hover:text-ink"
-                      @click="openRename(account)"
-                    >
-                      改名
-                    </button>
                   </div>
                 </TableCell>
                 <TableCell>
@@ -265,6 +370,13 @@ async function onFix(account) {
                       >
                         标记可用
                       </Button>
+                      <button
+                        variant="ghost"
+                        size="sm"
+                        @click="openRename(account)"
+                      >
+                        编辑
+                      </button>
                       <Button
                         v-if="account.enabled"
                         variant="ghost"
@@ -272,7 +384,7 @@ async function onFix(account) {
                         class="text-ember hover:bg-status-error-soft hover:text-ember"
                         @click="openDialog('disable', account)"
                       >
-                        禁用账号
+                        禁用
                       </Button>
                       <Button
                         v-else
@@ -280,7 +392,16 @@ async function onFix(account) {
                         size="sm"
                         @click="openDialog('enable', account)"
                       >
-                        启用账号
+                        启用
+                      </Button>
+                      <Button
+                        v-if="account.enabled"
+                        variant="ghost"
+                        size="sm"
+                        class="text-ember hover:bg-status-error-soft hover:text-ember"
+                        @click="confirmDelete(account)"
+                      >
+                        删除
                       </Button>
                     </template>
                   </div>
@@ -332,6 +453,87 @@ async function onFix(account) {
         <Button variant="outline" @click="renameOpen = false">取消</Button>
         <Button :disabled="pending" @click="onRenameSubmit">
           {{ pending ? '保存中…' : '保存' }}
+        </Button>
+      </template>
+    </Dialog>
+
+    <!-- 新增科应账号 -->
+    <Dialog :open="createOpen" title="新增科应账号" @update:open="(v) => (createOpen = v)">
+      <div class="space-y-3">
+        <div>
+          <Label>账号编号</Label>
+          <Input v-model="createForm.code" placeholder="如 KY-11" class="mt-1.5" />
+        </div>
+        <div>
+          <Label>科应账号</Label>
+          <Input v-model="createForm.username" placeholder="如 ky-11" class="mt-1.5" />
+        </div>
+        <p class="text-xs text-mid-gray">密码由系统以占位密文托管，创建后管理员可经「重置密码」生成真实密码。</p>
+      </div>
+      <template #footer>
+        <Button variant="outline" @click="createOpen = false">取消</Button>
+        <Button :disabled="pending || !createForm.code.trim() || !createForm.username.trim()" @click="saveCreate">
+          {{ pending ? '创建中…' : '创建' }}
+        </Button>
+      </template>
+    </Dialog>
+
+    <!-- 删除确认 -->
+    <Dialog
+      :open="deleteOpen"
+      title="删除账号"
+      destructive
+      :description="`确认删除「${deleteTarget?.code ?? ''}${deleteTarget?.username ? `（${deleteTarget.username}）` : ''}」？该操作不可撤销，相关租约与审计记录一并清除。`"
+      @update:open="deleteOpen = false"
+    >
+      <template #footer>
+        <Button variant="outline" @click="deleteOpen = false">取消</Button>
+        <Button variant="destructive" :disabled="pending" @click="doDelete">
+          {{ pending ? '删除中…' : '删除' }}
+        </Button>
+      </template>
+    </Dialog>
+
+    <!-- 导入 CSV（上传 → 解析预览 → 二次确认） -->
+    <Dialog :open="importOpen" title="导入科应账号（CSV）" @update:open="(v) => (importOpen = v)">
+      <div class="space-y-3">
+        <div class="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" @click="triggerImportFile">选择 CSV 文件</Button>
+          <Button variant="ghost" size="sm" @click="downloadAccountTemplate">下载模板</Button>
+          <input ref="importFileRef" type="file" accept=".csv,text/csv" class="hidden" @change="onImportFile" />
+        </div>
+        <p class="text-xs text-mid-gray">必需列：账号编号、科应账号。密码由系统托管，导入后管理员可经「重置密码」生成。</p>
+
+        <template v-if="importRows.length || importFailed.length">
+          <div class="max-h-48 overflow-auto rounded-lg border border-hairline">
+            <div
+              v-for="r in importRows"
+              :key="'ok' + r.index"
+              class="flex items-center justify-between gap-2 border-b border-hairline px-3 py-1.5 text-xs"
+            >
+              <span class="font-medium">{{ r.code }}</span>
+              <span class="text-mid-gray">{{ r.username }}</span>
+              <span class="text-green-600">可导入</span>
+            </div>
+            <div
+              v-for="r in importFailed"
+              :key="'bad' + r.index"
+              class="flex items-center justify-between gap-2 border-b border-hairline px-3 py-1.5 text-xs"
+            >
+              <span class="font-medium">{{ r.code || '(空)' }}</span>
+              <span class="text-mid-gray">{{ r.username || '' }}</span>
+              <span class="text-ember">{{ r.errors.join('；') }}</span>
+            </div>
+          </div>
+          <p class="text-xs" :class="importFailed.length ? 'text-ember' : 'text-mid-gray'">
+            可导入 {{ importRows.length }} 条，跳过 {{ importFailed.length }} 条
+          </p>
+        </template>
+      </div>
+      <template #footer>
+        <Button variant="outline" @click="importOpen = false">取消</Button>
+        <Button :disabled="pending || importRows.length === 0" @click="confirmImport">
+          {{ pending ? '导入中…' : `导入 ${importRows.length} 条` }}
         </Button>
       </template>
     </Dialog>
