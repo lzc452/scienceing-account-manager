@@ -45,3 +45,9 @@ Thumbs.db
 .codegraph/
 .agent-teams/
 .ai-memory/
+
+# 内网部署运行时产物（可再生成，不入库；config.env 除外——如需共享配置请自行取舍）
+deploy-lan/run/
+deploy-lan/nginx-prefix/
+deploy-lan/dist/
+deploy-lan/extension-lan/

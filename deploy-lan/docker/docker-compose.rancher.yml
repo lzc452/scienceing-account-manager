@@ -1,0 +1,33 @@
+# Rancher Desktop / Docker 后备部署（仅当本机 Node/nginx 路线不可用时）
+# 用法（在仓库根）：
+#   docker compose -f deploy-lan/docker/docker-compose.rancher.yml --env-file .env up -d
+#   docker compose -f deploy-lan/docker/docker-compose.rancher.yml down
+# 前提：Rancher Desktop 已在运行，且其进程在防火墙有入站 Allow（本机已验证存在该规则）。
+services:
+  backend:
+    image: node:24
+    container_name: scienceing-backend
+    working_dir: /app/apps/server
+    volumes:
+      - ../../:/app
+    command: node dist/main.js
+    environment:
+      - PORT=3000
+      - DATABASE_PATH=/app/data/scienceing.db
+      # 其余（SCIENCEING_MASTER_KEY / ADMIN_INITIAL_PASSWORD / SCIENCING_ADMIN_* /
+      #      SCIENCING_WORKER_CLI / SCIENCING_STORAGE_STATE）由 --env-file .env 注入
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  gateway:
+    image: nginx:alpine
+    container_name: scienceing-gateway
+    volumes:
+      - ../../apps/web/dist:/usr/share/nginx/html:ro
+      - ./nginx-docker.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "18080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
