@@ -43,7 +43,7 @@ deploy-lan/
 ├── README.md               本手册
 ├── scripts/
 │   ├── deploy.mjs          主 CLI（deploy|update|start|stop|status|build|
-│   │                       nginx:test|extension:pack|db:reset-admin|env:print）
+│   │                       nginx:test|extension:pack|db:reset-admin|env:init|env:print）
 │   ├── lib.mjs             共享工具：Node探测/.env解析/端口进程(经PowerShell)/
 │   │                       局域网IP探测/最小ZIP写入器
 │   ├── gateway.mjs         内置 Node 网关（零依赖静态托管+反代，nginx 兜底）
@@ -182,6 +182,9 @@ Worker 凭据**只走环境变量**（已配在仓库根 `.env`）：
 
 | 现象 | 处理 |
 |---|---|
+| 换新电脑/git clone 后没有 `.env` | `.env` 被 gitignore 不会同步。先 `node deploy-lan/scripts/deploy.mjs env:init` 生成模板（自动随机 master key、自动填 storage 路径）→ 用编辑器填 `SCIENCING_ADMIN_USERNAME/PASSWORD` → 若此前已 seed 过数据库，按下一行删库重建 |
+| 补/改了 `.env` 后要重新部署 | ① `deploy.mjs stop`；② 编辑 `.env`（**UTF-8 无 BOM**，别用记事本默认格式）；③ 若 `SCIENCEING_MASTER_KEY` 变了 → 删 `data\scienceing.db*`（否则旧密文解不开）；④ `deploy.mjs deploy`（migrate/seed 幂等 + 重启）；⑤ 若只改了 `ADMIN_INITIAL_PASSWORD`：seed 不覆盖已有 admin，补跑 `deploy.mjs db:reset-admin` |
+| 新电脑重部署后 admin 登不进 | 用 `env:init` 前那次跑过 seed 的话 admin 密码是当时**随机生成**的（看当时 seed 日志）；直接 `db:reset-admin` 重置为 `.env` 当前值 |
 | `deploy` 提示端口被“其它程序”占用 | 非本项目进程不会强杀，改端口或 `--force`（谨慎） |
 | 局域网 IP 变了（DHCP） | 改 `config.env` 的 `LAN_IP` 后重启；或把路由 DHCP 保留给本机 MAC |
 | 刷新 `/admin/...` 404 | 一定走了 80 端口那个旧 nginx 欢迎页——请访问 18080 网关 |
@@ -208,6 +211,7 @@ node deploy-lan/scripts/deploy.mjs
   extension:pack     仅打包 LAN 扩展 zip
   db:reset-admin     重置 admin 口令为 .env 配置值
   env:print          打印关键配置（脱敏）
+  env:init           生成/补全 .env 模板（新电脑首选；不覆盖已有值）
 ```
 
 版本记录：v1.0.0 —— 2026-09-02 首发（真机验证通过：构建/nginx18080网关/Node兜底网关/健康自检/LAN URL/扩展zip）。

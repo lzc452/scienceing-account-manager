@@ -16,8 +16,10 @@
  *   extension:pack    仅把扩展替换为 LAN 地址并打包 zip
  *   db:reset-admin    把 admin 口令重置为仓库 .env 的 ADMIN_INITIAL_PASSWORD
  *   env:print         打印解析后的关键环境配置（不含密码明文以外的敏感值结构）
+ *   env:init          生成/补全仓库根 .env 模板（新电脑首选；不覆盖已有值；master key 缺失时随机生成）
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, openSync, rmSync, mkdirSync, copyFileSync, readdirSync, writeFileSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -37,6 +39,10 @@ import {
 async function resolveRuntime() {
   const nodeBin = findNodeBin();
   if (!nodeBin) die('未找到可用的 Node.js（需 >= 22.5 且内置 node:sqlite）。\n  请安装 Node 24，或把 deploy-lan/config.env 的 NODE_BIN 指到 node.exe 绝对路径。');
+  if (!existsSync(ENV_FILE)) {
+    log('⚠ 仓库根缺少 .env（git clone 不会带 .env）。建议先执行：node deploy-lan/scripts/deploy.mjs env:init');
+    log('  然后用编辑器打开 .env 填写科应凭据后重新部署（详见 README「新电脑首次部署」）。');
+  }
   const cfg = loadConfig();
   const backendPort = Number(readEnvFile(ENV_FILE).PORT || process.env.PORT || BACKEND_DEFAULT_PORT);
   const gatewayPort = Number(cfg.GATEWAY_PORT || GATEWAY_DEFAULT_PORT);
@@ -620,6 +626,49 @@ async function cmdResetAdmin(argv) {
   process.exit(r.status ?? 1);
 }
 
+async function cmdEnvInit() {
+  const lines = [];
+  const header = '# 科应共享账号管理平台 —— 部署环境变量（由 deploy.mjs env:init 生成/补全，已 gitignore）\n'
+    + '# ⚠ SCIENCEING_MASTER_KEY 换值会导致已入库密码无法解密：要么沿用首次部署写入的值，要么删库重建（见 README FAQ）。\n';
+  if (existsSync(ENV_FILE)) {
+    const raw = readFileSync(ENV_FILE, 'utf8').replace(/^\uFEFF/, '');
+    if (raw.trim().length > 0) lines.push(...raw.split(/\r?\n/));
+    else lines.push(header);
+  } else {
+    lines.push(header);
+  }
+  const have = new Set(lines.map((l) => (/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(l) || [])[1]).filter(Boolean));
+  const defaults = {
+    PORT: String(BACKEND_DEFAULT_PORT),
+    ADMIN_INITIAL_PASSWORD: 'admin12345',
+    SCIENCING_ADMIN_URL: 'https://www.scienceing.com/account/management/list',
+    SCIENCING_STORAGE_STATE: join(REPO_ROOT, 'playwright', '.auth', 'admin.json'),
+    SCIENCING_WORKER_CLI: 'playwright/worker/dist/cli.js',
+  };
+  const created = [];
+  const note = (k) => { if (!defaults[k]) return ''; return '  # 默认值，请按需修改'; };
+  for (const [k, v] of Object.entries(defaults)) {
+    if (have.has(k)) continue;
+    lines.push(`${k}=${v}${note(k)}`);
+    created.push(k);
+  }
+  if (!have.has('SCIENCEING_MASTER_KEY')) {
+    lines.push(`SCIENCEING_MASTER_KEY=${randomBytes(32).toString('hex')}`);
+    created.push('SCIENCEING_MASTER_KEY');
+  }
+  const missingSecrets = ['SCIENCING_ADMIN_USERNAME', 'SCIENCING_ADMIN_PASSWORD'].filter((k) => !have.has(k));
+  if (missingSecrets.length > 0) {
+    lines.push('', '# 科应管理员凭据（Playwright 改密 Worker 使用，PRD §42：只走环境变量、绝不入库/入库代码）', ...missingSecrets.map((k) => `${k}=`));
+    created.push(...missingSecrets);
+  }
+  writeFileSync(ENV_FILE, lines.filter((_, i, a) => !(i < a.length - 1 && a[i] === '' && a[i + 1] === '')).join('\n').replace(/\n+$/, '\n'), 'utf8');
+  console.log(`[env:init] ${created.length > 0 ? `已新增/补全：${created.join(', ')}` : '环境变量已齐全，未改动任何值'}`);
+  console.log(`[env:init] 文件：${ENV_FILE}`);
+  if (created.includes('SCIENCEING_MASTER_KEY')) console.log('[env:init] ⚠ 本次生成了新的 SCIENCEING_MASTER_KEY —— 若此前已 seed 过数据库，必须“停服→删 data/scienceing.db*→重新 deploy”，否则旧密文解不开。');
+  if (missingSecrets.length > 0) console.log(`[env:init] ⚠ 请手动填写 ${missingSecrets.join(' / ')}（科应后台管理员凭据）后重新部署。`);
+  console.log('[env:init] 修改完成后：node deploy-lan/scripts/deploy.mjs deploy（或双击 deploy-update.bat）');
+}
+
 async function cmdEnvPrint() {
   const rt = await resolveRuntime();
   const env = readEnvFile(ENV_FILE);
@@ -645,6 +694,7 @@ const SUB = {
   'extension:pack': cmdPackExt,
   'db:reset-admin': cmdResetAdmin,
   'env:print': cmdEnvPrint,
+  'env:init': cmdEnvInit,
 };
 
 async function main() {
