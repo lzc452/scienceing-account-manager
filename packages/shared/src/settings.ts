@@ -33,7 +33,7 @@ export const NUMERIC_SETTING_KEYS: readonly SystemSettingKey[] = [
  * - critical_warning_seconds = 60（29 分钟临界弹窗）
  * - activity_throttle_seconds = 5（插件 Activity 上报节流，5~10 秒）
  * - extension_min_version = 1.0.0（低于此版本禁止领取，PRD R4）
- * - extension_latest_version = 1.2.0
+ * - extension_latest_version = 1.3.0（悬浮窗超时参数改为后端下发，需新版本支持）
  */
 export const DEFAULT_SYSTEM_SETTINGS: Record<SystemSettingKey, string> = {
   inactivity_timeout_seconds: '1800',
@@ -41,5 +41,5 @@ export const DEFAULT_SYSTEM_SETTINGS: Record<SystemSettingKey, string> = {
   critical_warning_seconds: '60',
   activity_throttle_seconds: '5',
   extension_min_version: '1.0.0',
-  extension_latest_version: '1.2.0',
+  extension_latest_version: '1.3.0',
 };

@@ -18,7 +18,7 @@
   let leaseId = null;
   let bound = false;
   let lastLocalActivityAt = 0;
-  let config = { warningSeconds: 300, criticalWarningSeconds: 60 };
+  let config = { warningSeconds: 300, criticalWarningSeconds: 60, inactivityTimeoutSeconds: 1800 };
 
   // -------------------------------------------------------------------------
   // Activity 监听（PRD §17 / §44）

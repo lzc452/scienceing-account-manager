@@ -62,9 +62,18 @@ export class ExtensionController {
       activityThrottleSeconds: Number(settings['activity_throttle_seconds'] ?? 5),
       warningSeconds: Number(settings['warning_seconds'] ?? 300),
       criticalWarningSeconds: Number(settings['critical_warning_seconds'] ?? 60),
+      // 无操作超时（秒，默认 1800 = 30 分钟）：管理员可在「系统设置-租约规则」调整，
+      // 回收判定与悬浮窗「环满刻度 / 倒计时」均以本值为准（扩展不再本地硬编码 30 分钟）。
+      inactivityTimeoutSeconds: this.numericSetting(settings, 'inactivity_timeout_seconds', 1800),
       // 下载包信息：前端「下载助手 / 下载最新版 ZIP」据此给出真实入口
       package: readPackage(),
     };
+  }
+
+  /** 读取数值型系统设置：仅采用 >0 的有效数字，否则回退 fallback（与 leases/accounts 的超时判定语义一致）。 */
+  private numericSetting(settings: Record<string, string>, key: string, fallback: number): number {
+    const value = Number(settings[key] ?? fallback);
+    return Number.isFinite(value) && value > 0 ? Math.round(value) : fallback;
   }
 
   private readSettings(): Record<string, string> {

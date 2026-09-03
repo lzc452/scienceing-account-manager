@@ -132,6 +132,8 @@ test('leases / logs / settings / extension config 端点', async () => {
   assert.equal(ext.status, 200);
   assert.equal(ext.body.minimumVersion, '1.0.0');
   assert.equal(typeof ext.body.activityThrottleSeconds, 'number');
+  // 无操作超时跟随上面 PUT 的 1200 实时下发（扩展悬浮窗环满刻度据此适配）
+  assert.equal(ext.body.inactivityTimeoutSeconds, 1200);
 });
 
 test('审计日志写入且不含敏感值', async () => {

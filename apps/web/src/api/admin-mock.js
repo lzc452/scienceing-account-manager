@@ -68,7 +68,7 @@ const state = reactive({
     critical_warning_seconds: '60',
     activity_throttle_seconds: '5',
     extension_min_version: '1.0.0',
-    extension_latest_version: '1.2.0',
+    extension_latest_version: '1.3.0',
   },
   health: {
     lastCheckedAt: ago(5 * MIN),

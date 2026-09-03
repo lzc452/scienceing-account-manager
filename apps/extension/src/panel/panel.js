@@ -9,7 +9,9 @@
  * 缩小面板（本次改造）：
  * - 默认形态为 48×48 白色圆角面板（radius 10px），仅显示「预计释放时间环」，不再遮挡操作区。
  * - 环形逆时针倒计时，环内居中文字「释放时间」（8px）。
- * - 环色随剩余时间变化：5–30min 绿 / 1–5min 黄 / 0–1min 红。
+ * - 环色随剩余时间变化（阈值由后端 config 下发，管理员可在系统设置调整）：
+ *   绿 = 距释放仍 > 即将释放提醒（warningSeconds）/ 黄 = 临界提醒前 / 红 = 临界提醒内（criticalWarningSeconds）。
+ * - 环满刻度 = 整个无操作超时租期（inactivityTimeoutSeconds，默认 30min，后端下发，不再本地硬编码）。
  * - 点击面板展开小型浮层（账号 + 预计释放 + 立即归还 / 返回看板），避免常态化遮挡。
  * - 0–1min 自动弹出提醒弹窗（含实时倒计时）：继续使用 / 立即归还；倒计时归零后弹窗切换为
  *   已释放态，仅保留「返回看板」按钮。
@@ -65,7 +67,7 @@
   let wrapper = null;
   let modalEl = null;
   let status = null;
-  let config = { warningSeconds: 300, criticalWarningSeconds: 60 };
+  let config = { warningSeconds: 300, criticalWarningSeconds: 60, inactivityTimeoutSeconds: 1800 };
   let serviceError = false;
   let state = 'unbound';
   let expanded = false;
@@ -76,7 +78,7 @@
   let dragStart = null; // { x, y, px, py }
   let dragMoved = false;
 
-  const RING_MAX_SECONDS = 1800; // 30min 刻度盘，环满表示 >=30min
+  const RING_MAX_SECONDS = 1800; // 默认刻度上限（无配置/非法配置时兜底 = 30min；实际值由 config.inactivityTimeoutSeconds 下发）
 
   // -------------------------------------------------------------------------
   // 状态推导（倒计时仅来自后端 expiresAt；连接异常时冻结）
@@ -128,18 +130,26 @@
     return COLORS.amber.ring; // warning / critical / unbound
   }
 
-  // 环色：5–30min 绿 / 1–5min 黄 / 0–1min 红；非活跃态用灰/琥珀
+  // 环满刻度 = 当前租期的无操作超时（管理员配置，经 /api/extension/config 随 LEASE_STATUS 推送）
+  function ringMaxSeconds() {
+    const v = Number(config.inactivityTimeoutSeconds);
+    return Number.isFinite(v) && v > 0 ? v : RING_MAX_SECONDS;
+  }
+
+  // 环色与状态机 deriveState 同源（绿/黄/红 均按后端下发的 config 阈值切换）；非活跃态用灰/琥珀
   function ringColors(remaining) {
     if (state === 'released' || state === 'unbound') return COLORS.gray;
     if (state === 'error') return COLORS.amber;
-    if (remaining >= 300) return COLORS.green;
-    if (remaining >= 60) return COLORS.amber;
+    const warning = Number(config.warningSeconds ?? 300);
+    const critical = Number(config.criticalWarningSeconds ?? 60);
+    if (remaining >= warning) return COLORS.green;
+    if (remaining >= critical) return COLORS.amber;
     return COLORS.red;
   }
 
   function ringRatio(remaining) {
     if (remaining <= 0) return 0;
-    return Math.max(0, Math.min(1, remaining / RING_MAX_SECONDS));
+    return Math.max(0, Math.min(1, remaining / ringMaxSeconds()));
   }
 
   // 逆时针环形路径（sweep-flag=0 = 屏幕坐标系下逆时针）。ratio=1 画整圆。
