@@ -53,3 +53,8 @@ deploy-lan/run/
 deploy-lan/nginx-prefix/
 deploy-lan/dist/
 deploy-lan/extension-lan/
+
+# 调试/验证用临时目录与脚本（不入库；此前误提交过，勿再 add）
+/.tmp-deps/
+.tmp-build-check/
+dist-tmp-*/
