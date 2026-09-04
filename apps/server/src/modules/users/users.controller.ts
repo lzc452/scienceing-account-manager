@@ -39,4 +39,17 @@ export class UsersController {
   ): Promise<AuthUser> {
     return this.usersService.update(id, dto, admin);
   }
+
+  /**
+   * 重置用户密码（须携带 POST /admin/verify-password 签发的 verifyToken）：
+   * POST /admin/users/:id/reset-password { newPassword, verifyToken }
+   */
+  @Post(':id/reset-password')
+  resetPassword(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: { newPassword?: string; verifyToken?: string },
+    @CurrentUser() admin: AuthUser,
+  ): Promise<AuthUser> {
+    return this.usersService.resetUserPassword(id, dto, admin);
+  }
 }

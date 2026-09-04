@@ -42,6 +42,20 @@ function parseLine(line) {
   return fields.map((f) => f.trim())
 }
 
+/**
+ * CSV 文本 → 二维字符串矩阵（去掉空行）。供 parse*Rows 使用；
+ * XLSX 文件经 SheetJS 归一为同样形状的矩阵后走同一套校验（见 lib/spreadsheet.js）。
+ */
+export function csvTextToMatrix(text) {
+  const lines = splitRows(text ?? '')
+  return lines.filter((line) => line.trim() !== '').map(parseLine)
+}
+
+/** 单元格归一化：任意输入 → 去首尾空白的字符串（数字/日期等由 SheetJS raw:false 先行转串） */
+function normalizeCells(row) {
+  return (row || []).map((cell) => String(cell ?? '').trim())
+}
+
 const HEADER_ALIASES = {
   username: ['username', '用户名', '账号', '登录名'],
   displayName: ['displayname', 'display_name', '姓名', '名称', '名字'],
@@ -62,15 +76,16 @@ function mapHeader(cell) {
 const VALID_ROLES = new Set(['USER', 'ADMIN'])
 
 /**
- * 解析用户 CSV 文本。
+ * 解析用户表格（二维矩阵，首行为表头）→ 行对象。
  * 返回 { rows: [{ index, username, displayName, department, role, password, errors: [] }], headerErrors: [] }
  * rows 中每行带 errors（空数组 = 合法行），供预览弹窗标记问题行。
+ * CSV 与 XLSX 两种来源都归一为矩阵后调用本函数，保证行为一致。
  */
-export function parseUsersCsv(text) {
-  const lines = splitRows(text).filter((line, i, arr) => line.trim() !== '' || i < arr.length - 1)
-  if (lines.length === 0) return { rows: [], headerErrors: ['文件为空'] }
+export function parseUsersRows(matrix) {
+  const norm = (matrix || []).map(normalizeCells)
+  if (norm.length === 0) return { rows: [], headerErrors: ['文件为空'] }
 
-  const headers = parseLine(lines[0]).map(mapHeader)
+  const headers = norm[0].map(mapHeader)
   const headerErrors = []
   for (const required of ['username', 'displayName', 'password']) {
     if (!headers.includes(required)) {
@@ -79,21 +94,23 @@ export function parseUsersCsv(text) {
   }
 
   const rows = []
-  for (let i = 1; i < lines.length; i += 1) {
-    const cells = parseLine(lines[i])
+  for (let i = 1; i < norm.length; i += 1) {
+    const cells = norm[i]
     const record = { username: '', displayName: '', department: '', role: 'USER', password: '' }
     headers.forEach((field, col) => {
       if (field && cells[col] !== undefined) record[field] = cells[col]
     })
 
+    // 行级校验必须无条件执行：早期实现用 `if (headerErrors.length === 0)` 把它短路掉，
+    // 导致表头缺列时每一行都被误标为「✓ 可导入」并放行提交，后端再逐行拒绝，
+    // 用户看到的预览与结果完全对不上（导入流程不闭环）。缺列会让对应字段为空串，
+    // 下面的必填校验自然会给出行级错误，无需依赖 headerErrors 判断。
     const errors = []
-    if (headerErrors.length === 0) {
-      if (!record.username) errors.push('用户名为空')
-      if (!record.displayName) errors.push('姓名为空')
-      if (!record.password) errors.push('密码为空')
-      const role = (record.role || 'USER').toUpperCase()
-      if (!VALID_ROLES.has(role)) errors.push(`角色必须是 USER 或 ADMIN（当前「${record.role}」）`)
-    }
+    if (!record.username) errors.push('用户名为空')
+    if (!record.displayName) errors.push('姓名为空')
+    if (!record.password) errors.push('密码为空')
+    const role = (record.role || 'USER').toUpperCase()
+    if (!VALID_ROLES.has(role)) errors.push(`角色必须是 USER 或 ADMIN（当前「${record.role}」）`)
 
     rows.push({
       index: i,
@@ -118,6 +135,11 @@ export function parseUsersCsv(text) {
   }
 
   return { rows, headerErrors }
+}
+
+/** 解析用户 CSV 文本（兼容旧调用，等价 parseUsersRows(csvTextToMatrix(text))）。 */
+export function parseUsersCsv(text) {
+  return parseUsersRows(csvTextToMatrix(text))
 }
 
 /**
@@ -145,16 +167,19 @@ function mapAccountHeader(cell) {
   return null
 }
 
+/** 与后端 admin.service.createAccount 的校验保持一致，提前拦截非法编号，避免导入后才被逐行拒绝。 */
+const CODE_PATTERN = /^[A-Za-z0-9_-]+$/
+
 /**
- * 解析科应账号 CSV 文本。
+ * 解析科应账号表格（二维矩阵，首行为表头）→ 行对象。
  * 返回 { rows: [{ index, code, username, errors: [] }], headerErrors: [] }
  * 必需列：code、username。批内 code 重复的行标记为不可导入。
  */
-export function parseAccountsCsv(text) {
-  const lines = splitRows(text).filter((line, i, arr) => line.trim() !== '' || i < arr.length - 1)
-  if (lines.length === 0) return { rows: [], headerErrors: ['文件为空'] }
+export function parseAccountsRows(matrix) {
+  const norm = (matrix || []).map(normalizeCells)
+  if (norm.length === 0) return { rows: [], headerErrors: ['文件为空'] }
 
-  const headers = parseLine(lines[0]).map(mapAccountHeader)
+  const headers = norm[0].map(mapAccountHeader)
   const headerErrors = []
   for (const required of ['code', 'username']) {
     if (!headers.includes(required)) {
@@ -163,17 +188,19 @@ export function parseAccountsCsv(text) {
   }
 
   const rows = []
-  for (let i = 1; i < lines.length; i += 1) {
-    const cells = parseLine(lines[i])
+  for (let i = 1; i < norm.length; i += 1) {
+    const cells = norm[i]
     const record = { code: '', username: '' }
     headers.forEach((field, col) => {
       if (field && cells[col] !== undefined) record[field] = cells[col]
     })
 
+    // 同上：行级校验无条件执行，缺列时由必填校验给出行级错误。
     const errors = []
-    if (headerErrors.length === 0) {
-      if (!record.code) errors.push('账号编号为空')
-      if (!record.username) errors.push('科应账号为空')
+    if (!record.code) errors.push('账号编号为空')
+    if (!record.username) errors.push('科应账号为空')
+    if (record.code && !CODE_PATTERN.test(record.code)) {
+      errors.push('账号编号仅允许字母、数字、- 和 _')
     }
 
     rows.push({ index: i, code: record.code, username: record.username, errors })
@@ -191,6 +218,11 @@ export function parseAccountsCsv(text) {
   }
 
   return { rows, headerErrors }
+}
+
+/** 解析科应账号 CSV 文本（兼容旧调用，等价 parseAccountsRows(csvTextToMatrix(text))）。 */
+export function parseAccountsCsv(text) {
+  return parseAccountsRows(csvTextToMatrix(text))
 }
 
 /** 生成账号导入示例 CSV（供「下载模板」使用）。 */

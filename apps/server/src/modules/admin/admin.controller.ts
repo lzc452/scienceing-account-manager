@@ -10,6 +10,15 @@ import type { AuthUser } from '../auth/auth.types';
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
 
+  /** 敏感操作前验证当前管理员密码：POST /admin/verify-password { password } → { verifyToken, expiresAt } */
+  @Post('verify-password')
+  verifyPassword(
+    @Body() dto: { password?: string },
+    @CurrentUser() admin: AuthUser,
+  ): Promise<{ verifyToken: string; expiresAt: string }> {
+    return this.adminService.verifyAdminPassword(dto.password ?? '', admin);
+  }
+
   @Get('accounts')
   accounts(): AdminAccountView[] {
     return this.adminService.listAccounts();

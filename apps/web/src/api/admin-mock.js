@@ -97,7 +97,9 @@ function cloneUsers() {
 
 async function listAccounts() {
   await delay()
-  return state.accounts.map((a) => ({ ...a }))
+  // passwordProvisioned：真实后端由解密判断返回。mock 未标注的账号默认视为已初始化，
+  // 仅显式 false（模拟导入后待改密场景）才显示「待改密」标记。
+  return state.accounts.map((a) => ({ ...a, passwordProvisioned: a.passwordProvisioned !== false }))
 }
 
 function accountOf(id) {
@@ -190,6 +192,8 @@ async function createAccount(dto) {
     lastPasswordChangedAt: new Date().toISOString(),
     enabled: true,
     createdAt: new Date().toISOString(),
+    // 与真实后端一致：手工新增 / CSV 导入的账号密码为占位值，待改密后才可领用
+    passwordProvisioned: false,
   }
   state.accounts.push(account)
   return { ...account }
@@ -251,6 +255,37 @@ async function updateUser(id, dto) {
   if (dto.department !== undefined) user.department = dto.department
   if (dto.role !== undefined) user.role = dto.role
   if (dto.enabled !== undefined) user.enabled = dto.enabled
+  // 与真实后端一致：密码不能经 PATCH 直接改（须先验证当前管理员密码）
+  if (dto.password !== undefined) {
+    throw httpError('重置密码需先验证当前管理员密码，请使用「重置密码」操作', 400)
+  }
+  user.updatedAt = new Date().toISOString()
+  return { ...user }
+}
+
+// 演示用当前管理员密码（与 mock.js 登录密码保持一致；真实后端为 bcrypt 校验）
+const MOCK_ADMIN_PASSWORD = 'mock-admin'
+// 演示用 verifyToken（真实后端为 HMAC 短时票据）；仅做非空与到期展示，mock 不做密码学校验
+const MOCK_VERIFY_TTL_MS = 5 * 60 * 1000
+
+async function verifyAdminPassword(password) {
+  await delay()
+  if (!password) throw httpError('请输入当前管理员密码', 400)
+  if (password !== MOCK_ADMIN_PASSWORD) {
+    throw httpError('当前管理员密码不正确', 401)
+  }
+  return {
+    verifyToken: `mock-verify-${Date.now()}`,
+    expiresAt: new Date(Date.now() + MOCK_VERIFY_TTL_MS).toISOString(),
+  }
+}
+
+async function resetUserPassword(id, newPassword, verifyToken) {
+  await delay()
+  if (!verifyToken) throw httpError('安全验证已失效，请重新验证当前管理员密码', 401)
+  const user = state.users.find((u) => u.id === Number(id))
+  if (!user) throw httpError('用户不存在', 404)
+  if (user.role === 'ADMIN') throw httpError('不能通过「重置用户密码」修改自己的密码', 403)
   user.updatedAt = new Date().toISOString()
   return { ...user }
 }
@@ -575,6 +610,8 @@ export const adminMockApi = {
   createUser,
   bulkCreateUsers,
   updateUser,
+  verifyAdminPassword,
+  resetUserPassword,
   listLeases,
   listLogs,
   getSettings,

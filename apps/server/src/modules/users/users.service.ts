@@ -4,15 +4,21 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { DatabaseService } from '../../db/database.service';
 import { AuditService } from '../../db/audit.service';
 import { AUDIT_ACTION, AUDIT_RESULT, USER_ROLE } from '../../db/constants';
 import { hashPassword } from '../../crypto/password';
+import { verifyVerifyToken, VERIFY_PURPOSE } from '../../crypto/verify-token';
 import { nowIso } from '../../db/config';
 import { toAuthUser, type AuthUser, type UserRow } from '../auth/auth.types';
 import type { CreateUserDto } from './dto/create-user.dto';
 import type { UpdateUserDto } from './dto/update-user.dto';
+
+/** 登录密码长度约束（bcrypt 有效上限 72 字节，超出部分会被静默截断，故此处显式拒绝）。 */
+const PASSWORD_MIN_LENGTH = 8;
+const PASSWORD_MAX_LENGTH = 72;
 
 @Injectable()
 export class UsersService {
@@ -139,9 +145,14 @@ export class UsersService {
       }
     }
 
+    // 堵住绕过：PATCH 直改密码会跳过「验证当前管理员密码」的安全步骤，
+    // 一律要求走 POST /admin/users/:id/reset-password（携带 verifyToken）。
+    if (dto.password !== undefined) {
+      throw new BadRequestException('重置密码需先验证当前管理员密码，请使用「重置密码」操作');
+    }
+
     const fields: string[] = [];
     const values: Array<string | number> = [];
-    let passwordChanged = false;
 
     if (dto.displayName !== undefined) {
       fields.push('display_name = ?');
@@ -162,11 +173,6 @@ export class UsersService {
       fields.push('enabled = ?');
       values.push(dto.enabled ? 1 : 0);
     }
-    if (dto.password !== undefined && dto.password !== '') {
-      fields.push('password_hash = ?');
-      values.push(await hashPassword(dto.password));
-      passwordChanged = true;
-    }
 
     if (fields.length > 0) {
       fields.push('updated_at = ?');
@@ -174,16 +180,63 @@ export class UsersService {
       this.dbService.db.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).run(...values, id);
     }
 
-    // 重置密码或禁用 → 使该用户所有旧会话立即失效
-    if (passwordChanged || dto.enabled === false) {
+    // 禁用 → 使该用户所有旧会话立即失效
+    if (dto.enabled === false) {
       this.dbService.db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
     }
 
     this.audit.record({
-      action: passwordChanged ? AUDIT_ACTION.USER_PASSWORD_RESET : AUDIT_ACTION.USER_UPDATE,
+      action: AUDIT_ACTION.USER_UPDATE,
       result: AUDIT_RESULT.SUCCESS,
       userId: admin.id,
-      metadata: { targetUserId: id, passwordChanged },
+      metadata: { targetUserId: id },
+    });
+
+    const row = this.dbService.db.prepare('SELECT * FROM users WHERE id = ?').get(id) as unknown as UserRow;
+    return toAuthUser(row);
+  }
+
+  /**
+   * 重置用户登录密码（需求：须先验证当前管理员密码）。
+   * 调用方必须携带 POST /admin/verify-password 签发的 verifyToken（HMAC 短时票据，
+   * 绑定管理员 id + purpose），校验通过才重置；重置后该用户所有旧会话立即失效。
+   * 不开放重置自己的密码：管理员自己的口令走个人修改/ db:reset-admin 流程，避免「验证自己改自己」的闭环漏洞。
+   */
+  async resetUserPassword(
+    id: number,
+    dto: { newPassword?: string; verifyToken?: string },
+    admin: AuthUser,
+  ): Promise<AuthUser> {
+    if (!dto.verifyToken || !verifyVerifyToken(dto.verifyToken, admin.id, VERIFY_PURPOSE.USER_PASSWORD_RESET)) {
+      throw new UnauthorizedException('安全验证已失效，请重新验证当前管理员密码');
+    }
+
+    const existing = this.dbService.db.prepare('SELECT * FROM users WHERE id = ?').get(id) as unknown as UserRow | undefined;
+    if (!existing) {
+      throw new NotFoundException('用户不存在');
+    }
+    if (existing.id === admin.id) {
+      throw new ForbiddenException('不能通过「重置用户密码」修改自己的密码');
+    }
+
+    const newPassword = dto.newPassword ?? '';
+    if (newPassword.length < PASSWORD_MIN_LENGTH || newPassword.length > PASSWORD_MAX_LENGTH) {
+      throw new BadRequestException(`新密码长度需在 ${PASSWORD_MIN_LENGTH}–${PASSWORD_MAX_LENGTH} 个字符之间`);
+    }
+
+    const passwordHash = await hashPassword(newPassword);
+    const now = nowIso();
+    this.dbService.db
+      .prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?')
+      .run(passwordHash, now, id);
+    // 使该用户所有旧会话立即失效
+    this.dbService.db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
+
+    this.audit.record({
+      action: AUDIT_ACTION.USER_PASSWORD_RESET,
+      result: AUDIT_RESULT.SUCCESS,
+      userId: admin.id,
+      metadata: { targetUserId: id, targetUsername: existing.username },
     });
 
     const row = this.dbService.db.prepare('SELECT * FROM users WHERE id = ?').get(id) as unknown as UserRow;

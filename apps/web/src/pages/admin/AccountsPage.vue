@@ -30,7 +30,22 @@ import {
   resetPassword,
 } from '@/api/admin'
 import { toStatusKind } from '@/lib/status'
-import { accountsCsvTemplate, parseAccountsCsv } from '@/lib/csv'
+import { accountsCsvTemplate } from '@/lib/csv'
+import {
+  SPREADSHEET_ACCEPT,
+  SPREADSHEET_EXTENSIONS,
+  aoaToWorkbookBytes,
+  isSpreadsheetFile,
+  parseAccountsFile,
+} from '@/lib/spreadsheet'
+
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+/** 科应账号表格模板（CSV / XLSX 共用列名约定）。 */
+const ACCOUNT_TEMPLATE_AOA = [
+  ['账号编号', '科应账号'],
+  ['KY-11', 'ky-11'],
+  ['KY-12', 'ky-12'],
+]
 
 const loading = ref(true)
 const error = ref('')
@@ -95,29 +110,74 @@ async function saveCreate() {
   }
 }
 
-// CSV 导入（解析交互与用户导入一致：上传 → 预览 → 二次确认）
+// CSV / XLSX 导入（解析交互与用户导入一致：上传 → 预览 → 二次确认）
 const importOpen = ref(false)
 const importFileRef = ref(null)
 const importRows = ref([])
 const importFailed = ref([])
+const importResult = ref(null) // { created, failedCount } —— 非空表示本轮已出结果，禁止重复提交
+
+/** 触发浏览器下载（a 需入 DOM 且延后 revoke，否则部分浏览器会中断下载）。data 为字符串(CSV)或字节(XLSX)。 */
+function downloadBlob(filename, data, type) {
+  const isBinary = typeof data !== 'string'
+  const blob = isBinary
+    ? new Blob([data], { type })
+    : new Blob(['\uFEFF' + data], { type: type || 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+function onImportDialogToggle(open) {
+  importOpen.value = open
+  if (!open) {
+    importRows.value = []
+    importFailed.value = []
+    importResult.value = null
+  }
+}
 
 function triggerImportFile() {
   importFileRef.value?.click()
 }
 function downloadAccountTemplate() {
-  const blob = new Blob([accountsCsvTemplate()], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = 'accounts-template.csv'
-  a.click()
-  URL.revokeObjectURL(url)
+  downloadBlob('科应账号导入模板.csv', accountsCsvTemplate())
 }
+
+/** 下载 xlsx 模板：与解析共用同一份 vendored SheetJS 生成，保证读得回。 */
+async function downloadAccountXlsxTemplate() {
+  try {
+    const bytes = await aoaToWorkbookBytes(ACCOUNT_TEMPLATE_AOA, '账号模板')
+    downloadBlob('科应账号导入模板.xlsx', bytes, XLSX_MIME)
+  } catch (e) {
+    toast({ title: e?.message || '模板生成失败', variant: 'destructive' })
+  }
+}
+
 async function onImportFile(e) {
   const file = e.target.files?.[0]
+  e.target.value = ''
   if (!file) return
-  const text = await file.text()
-  const { rows, headerErrors } = parseAccountsCsv(text)
+  if (!isSpreadsheetFile(file.name)) {
+    toast({ title: `仅支持 ${SPREADSHEET_EXTENSIONS.join(' / ')} 文件`, variant: 'destructive' })
+    return
+  }
+  // 重新选文件即开启新一轮：清掉上一轮结果，避免新旧预览/结果混在一起
+  importResult.value = null
+  let result
+  try {
+    result = await parseAccountsFile(file)
+  } catch (err) {
+    toast({ title: err?.message || '文件解析失败', variant: 'destructive' })
+    return
+  }
+  const { rows, headerErrors } = result
   if (headerErrors.length) {
     toast({ title: headerErrors.join('；'), variant: 'destructive' })
     importRows.value = []
@@ -130,23 +190,33 @@ async function onImportFile(e) {
       .filter((r) => r.errors.length > 0)
       .map((r) => ({ index: r.index, code: r.code, username: r.username, errors: r.errors }))
   }
-  e.target.value = ''
 }
+
 async function confirmImport() {
-  if (importRows.value.length === 0) return
+  if (importResult.value || importRows.value.length === 0) return
   pending.value = true
   try {
     const res = await bulkCreateAccounts(importRows.value.map((r) => ({ code: r.code, username: r.username })))
-    const created = res?.created ?? importRows.value.length
+    const created = res?.created ?? 0
     const failed = res?.failed ?? []
     toast({
       title: `已导入 ${created} 条${failed.length ? `，${failed.length} 条失败` : ''}`,
+      description: created > 0 ? '导入账号的密码为系统占位值，请执行「重置密码」生成真实密码后方可领用。' : undefined,
       variant: failed.length ? 'default' : 'success',
     })
-    importOpen.value = false
+    // 把后端失败原因回写到明细列表，成功行从待导入列表移除，杜绝重复提交
+    const failedReason = new Map(failed.map((f) => [f.code, f.reason]))
+    importFailed.value = [
+      ...importFailed.value.filter((r) => !failedReason.has(r.code)),
+      ...importRows.value
+        .filter((r) => failedReason.has(r.code))
+        .map((r) => ({ index: r.index, code: r.code, username: r.username, errors: [failedReason.get(r.code)] })),
+    ]
     importRows.value = []
-    importFailed.value = []
+    importResult.value = { created, failedCount: failed.length }
     load()
+    // 全部成功才自动关闭；有失败时保留弹窗展示明细（提交按钮此时已隐藏）
+    if (failed.length === 0) importOpen.value = false
   } catch (e) {
     toast({ title: e?.message || '导入失败', variant: 'destructive' })
   } finally {
@@ -276,7 +346,7 @@ async function onFix(account) {
           科应账号管理
         </h1>
         <div class="flex flex-wrap items-center gap-2">
-          <Button variant="outline" @click="importOpen = true">导入 CSV</Button>
+          <Button variant="outline" @click="importOpen = true">导入表格</Button>
           <Button @click="createOpen = true">新增账号</Button>
         </div>
       </div>
@@ -333,7 +403,16 @@ async function onFix(account) {
                   </div>
                 </TableCell>
                 <TableCell>
-                  <Badge :tone="toStatusKind(account.status)" />
+                  <div class="flex items-center gap-2">
+                    <Badge :tone="toStatusKind(account.status)" />
+                    <span
+                      v-if="!account.passwordProvisioned"
+                      class="cursor-help whitespace-nowrap rounded-full border border-hairline px-2 py-0.5 text-xs text-mid-gray"
+                      title="密码尚未初始化（seed / 导入占位）。请先执行「重置密码」在科应后台生成真实密码，否则该账号无法被领用。"
+                    >
+                      待改密
+                    </span>
+                  </div>
                 </TableCell>
                 <TableCell :class="account.currentUser ? 'text-ink' : 'text-mid-gray'">
                   {{ account.currentUser || '—' }}
@@ -494,15 +573,16 @@ async function onFix(account) {
       </template>
     </Dialog>
 
-    <!-- 导入 CSV（上传 → 解析预览 → 二次确认） -->
-    <Dialog :open="importOpen" title="导入科应账号（CSV）" @update:open="(v) => (importOpen = v)">
+    <!-- 导入表格（CSV / XLSX：上传 → 解析预览 → 二次确认） -->
+    <Dialog :open="importOpen" title="导入科应账号（CSV / XLSX）" @update:open="onImportDialogToggle">
       <div class="space-y-3">
         <div class="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" @click="triggerImportFile">选择 CSV 文件</Button>
-          <Button variant="ghost" size="sm" @click="downloadAccountTemplate">下载模板</Button>
-          <input ref="importFileRef" type="file" accept=".csv,text/csv" class="hidden" @change="onImportFile" />
+          <Button variant="outline" size="sm" @click="triggerImportFile">选择文件</Button>
+          <Button variant="ghost" size="sm" @click="downloadAccountTemplate">下载CSV模板</Button>
+          <Button variant="ghost" size="sm" @click="downloadAccountXlsxTemplate">下载XLSX模板</Button>
+          <input ref="importFileRef" type="file" :accept="SPREADSHEET_ACCEPT" class="hidden" @change="onImportFile" />
         </div>
-        <p class="text-xs text-mid-gray">必需列：账号编号、科应账号。密码由系统托管，导入后管理员可经「重置密码」生成。</p>
+        <p class="text-xs text-mid-gray">必需列：账号编号、科应账号。支持 .csv / .xlsx（.xlsm / .xls），首行为列名。密码由系统托管，导入后管理员可经「重置密码」生成。</p>
 
         <template v-if="importRows.length || importFailed.length">
           <div class="max-h-48 overflow-auto rounded-lg border border-hairline">
@@ -529,10 +609,21 @@ async function onFix(account) {
             可导入 {{ importRows.length }} 条，跳过 {{ importFailed.length }} 条
           </p>
         </template>
+
+        <p v-if="importResult && importResult.created > 0" class="text-xs text-mid-gray">
+          已导入 {{ importResult.created }} 条。导入账号的密码为系统占位值，
+          需逐个执行「重置密码」生成真实密码后方可领用。
+        </p>
       </div>
       <template #footer>
-        <Button variant="outline" @click="importOpen = false">取消</Button>
-        <Button :disabled="pending || importRows.length === 0" @click="confirmImport">
+        <Button variant="outline" @click="onImportDialogToggle(false)">
+          {{ importResult ? '关闭' : '取消' }}
+        </Button>
+        <Button
+          v-if="!importResult"
+          :disabled="pending || importRows.length === 0"
+          @click="confirmImport"
+        >
           {{ pending ? '导入中…' : `导入 ${importRows.length} 条` }}
         </Button>
       </template>

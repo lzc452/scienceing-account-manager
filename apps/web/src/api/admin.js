@@ -85,6 +85,23 @@ export function updateUser(userId, dto) {
   return USE_MOCK ? adminMockApi.updateUser(userId, dto) : http('PATCH', `/admin/users/${userId}`, dto)
 }
 
+/**
+ * 敏感操作前的管理员自证：POST /admin/verify-password { password } → { verifyToken, expiresAt }
+ * verifyToken 为 HMAC 短时票据（5 分钟），供重置用户密码等操作的前置验证。
+ */
+export function verifyAdminPassword(password) {
+  return USE_MOCK
+    ? adminMockApi.verifyAdminPassword(password)
+    : http('POST', '/admin/verify-password', { password })
+}
+
+/** 重置用户登录密码（须携带 verifyToken）：POST /admin/users/:id/reset-password */
+export function resetUserPassword(userId, newPassword, verifyToken) {
+  return USE_MOCK
+    ? adminMockApi.resetUserPassword(userId, newPassword, verifyToken)
+    : http('POST', `/admin/users/${userId}/reset-password`, { newPassword, verifyToken })
+}
+
 export function getAdminLeases(params) {
   if (USE_MOCK) return adminMockApi.listLeases(params)
   const qs = new URLSearchParams()

@@ -11,6 +11,7 @@ import { ACCOUNT_STATUS, AUDIT_ACTION, AUDIT_RESULT, LEASE_STATUS, RELEASE_REASO
 import { generateLeaseToken, hashLeaseToken } from '../../crypto/lease-token';
 import { decryptSecret, parsePayload } from '../../crypto/secret-box';
 import { loadMasterKey } from '../../crypto/master-key';
+import { isPasswordProvisioned } from '../../crypto/account-password-state';
 import { nowIso } from '../../db/config';
 import { isVersionAtLeast } from '../../lib/version';
 import type { AccountCredentialsView, AccountRow, LeaseRow, LeaseView } from './leases.types';
@@ -67,13 +68,28 @@ export class LeasesService {
 
     db.exec('BEGIN IMMEDIATE');
     try {
-      const account = db
-        .prepare('SELECT * FROM scienceing_accounts WHERE status = ? AND enabled = 1 ORDER BY id LIMIT 1')
-        .get(ACCOUNT_STATUS.AVAILABLE) as unknown as AccountRow | undefined;
+      // 占位密码（seed / CSV 导入）的账号不可发放：密文未对应科应平台上的真实口令，
+      // 下发后扩展登录必然失败（此前直接 LIMIT 1 会把这类账号发给用户，导致「一用就废」）。
+      // 池内逐个解密挑选第一个真实配置的可用账号；账号量小（默认 10 级），开销可忽略。
+      const candidates = db
+        .prepare('SELECT * FROM scienceing_accounts WHERE status = ? AND enabled = 1 ORDER BY id')
+        .all(ACCOUNT_STATUS.AVAILABLE) as unknown as AccountRow[];
+      const account = candidates.find((c) => isPasswordProvisioned(c.current_password_ciphertext));
       if (!account) {
         db.exec('ROLLBACK');
-        this.audit.record({ action: AUDIT_ACTION.CLAIM_ACCOUNT, result: AUDIT_RESULT.FAILED, userId, metadata: { reason: 'no_available_account' } });
-        throw new ConflictException('暂无可用账号');
+        this.audit.record({
+          action: AUDIT_ACTION.CLAIM_ACCOUNT,
+          result: AUDIT_RESULT.FAILED,
+          userId,
+          metadata: {
+            reason: candidates.length === 0 ? 'no_available_account' : 'no_provisioned_account',
+          },
+        });
+        throw new ConflictException(
+          candidates.length === 0
+            ? '暂无可用账号'
+            : { message: '可用账号均未完成初始改密，请联系管理员在账号管理中执行「重置密码」', code: 'ACCOUNT_NOT_PROVISIONED' },
+        );
       }
 
       const now = nowIso();

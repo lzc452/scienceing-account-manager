@@ -79,6 +79,8 @@ export const AUDIT_ACTION = {
   USER_BULK_CREATE: 'USER_BULK_CREATE',
   ACCOUNT_RENAME: 'ACCOUNT_RENAME',
   MANUAL_UPDATE: 'MANUAL_UPDATE',
+  /** 管理员执行敏感操作前自证当前密码（USER_PASSWORD_RESET 的前置验证） */
+  ADMIN_PASSWORD_VERIFY: 'ADMIN_PASSWORD_VERIFY',
 } as const;
 
 /** 审计结果 */
@@ -86,6 +88,13 @@ export const AUDIT_RESULT = {
   SUCCESS: 'SUCCESS',
   FAILED: 'FAILED',
 } as const;
+
+/**
+ * 账号密码占位值：仅表示「账号已登记」，不代表科应平台上的真实口令。
+ * seed 与 CSV 批量导入写入的都是它——此时账号不可领用，
+ * 必须经「重置密码」流程在科应后台改密成功后才能下发真实口令。
+ */
+export const PLACEHOLDER_ACCOUNT_PASSWORD = '__PLACEHOLDER__';
 
 /**
  * 审计动作中文名（展示层映射，供 GET /admin/logs 输出 actionLabel）。
@@ -116,4 +125,5 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   SETTING_UPDATE: '参数更新',
   MANUAL_UPDATE: '更新使用手册',
   PASSWORD_DECRYPT_FAILED: '密码解密失败',
+  ADMIN_PASSWORD_VERIFY: '验证管理员密码',
 };

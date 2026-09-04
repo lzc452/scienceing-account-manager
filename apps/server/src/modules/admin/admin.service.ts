@@ -1,11 +1,20 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { DatabaseService } from '../../db/database.service';
 import { AuditService } from '../../db/audit.service';
 import { ACCOUNT_STATUS, AUDIT_ACTION, AUDIT_RESULT, LEASE_STATUS, RELEASE_REASON } from '../../db/constants';
 import { AutomationService } from '../automation/automation.service';
+import { verifyPassword } from '../../crypto/password';
+import { signVerifyToken, VERIFY_PURPOSE } from '../../crypto/verify-token';
 import { encryptSecret, serializePayload } from '../../crypto/secret-box';
 import { loadMasterKey } from '../../crypto/master-key';
 import { generateAccountPassword } from '../../crypto/account-password';
+import { isPasswordProvisioned } from '../../crypto/account-password-state';
 import { nowIso } from '../../db/config';
 import { SEED_PLACEHOLDER_PASSWORD } from '../../db/seed';
 import type { AccountRow } from '../leases/leases.types';
@@ -20,6 +29,8 @@ export interface AdminAccountView {
   lastPasswordChangedAt: string | null;
   enabled: boolean;
   createdAt: string;
+  /** false = 密码仍是占位值（seed/导入），需执行「重置密码」后才可领用。 */
+  passwordProvisioned: boolean;
 }
 
 export interface AdminLeaseView {
@@ -42,6 +53,7 @@ interface AccountListRow {
   enabled: number;
   created_at: string;
   current_user: string | null;
+  current_password_ciphertext: string | null;
 }
 
 interface LeaseListRow {
@@ -84,10 +96,51 @@ export class AdminService {
     };
   }
 
+  /**
+   * 敏感操作前的管理员自证（需求：重置用户密码前须先验证当前管理员密码）。
+   * 校验当前会话管理员的密码，通过后签发 HMAC 短时票据（绑定管理员 id + 用途，
+   * 见 crypto/verify-token），后续敏感操作接口校验票据后才执行——避免「验证归验证、
+   * 提交归提交」，被无验证的请求绕过。
+   * 验证成功与失败均记审计（失败常用于定位撞库/误操作）。
+   */
+  async verifyAdminPassword(
+    password: string,
+    adminUser: AuthUser,
+  ): Promise<{ verifyToken: string; expiresAt: string }> {
+    if (!password) {
+      throw new BadRequestException('请输入当前管理员密码');
+    }
+    const row = this.dbService.db.prepare('SELECT password_hash FROM users WHERE id = ?').get(adminUser.id) as
+      | { password_hash: string }
+      | undefined;
+    if (!row) {
+      throw new NotFoundException('当前登录管理员不存在');
+    }
+    const ok = await verifyPassword(password, row.password_hash);
+    if (!ok) {
+      this.audit.record({
+        action: AUDIT_ACTION.ADMIN_PASSWORD_VERIFY,
+        result: AUDIT_RESULT.FAILED,
+        userId: adminUser.id,
+        metadata: { purpose: VERIFY_PURPOSE.USER_PASSWORD_RESET, reason: 'password_mismatch' },
+      });
+      throw new UnauthorizedException('当前管理员密码不正确');
+    }
+    const issued = signVerifyToken(adminUser.id, VERIFY_PURPOSE.USER_PASSWORD_RESET);
+    this.audit.record({
+      action: AUDIT_ACTION.ADMIN_PASSWORD_VERIFY,
+      result: AUDIT_RESULT.SUCCESS,
+      userId: adminUser.id,
+      metadata: { purpose: VERIFY_PURPOSE.USER_PASSWORD_RESET },
+    });
+    return { verifyToken: issued.token, expiresAt: issued.expiresAt };
+  }
+
   listAccounts(): AdminAccountView[] {
     const rows = this.dbService.db
       .prepare(
         `SELECT a.id, a.code, a.username, a.status, a.last_password_changed_at, a.enabled, a.created_at,
+                a.current_password_ciphertext,
                 u.display_name AS current_user
          FROM scienceing_accounts a
          LEFT JOIN leases l ON l.account_id = a.id AND l.status = ?
@@ -105,6 +158,7 @@ export class AdminService {
       lastPasswordChangedAt: row.last_password_changed_at,
       enabled: row.enabled === 1,
       createdAt: row.created_at,
+      passwordProvisioned: isPasswordProvisioned(row.current_password_ciphertext),
     }));
   }
 
@@ -290,17 +344,8 @@ export class AdminService {
       metadata: { from: account.username, to: username ?? account.username },
     });
 
-    const updated = this.getAccount(accountId);
-    return {
-      id: updated.id,
-      code: updated.code,
-      username: updated.username,
-      status: updated.status,
-      currentUser: null,
-      lastPasswordChangedAt: updated.last_password_changed_at,
-      enabled: updated.enabled === 1,
-      createdAt: updated.created_at,
-    };
+    // 视图统一走 accountView（含 passwordProvisioned / 当前使用人），避免字段遗漏
+    return this.accountView(accountId);
   }
 
   private getAccount(accountId: number): AccountRow {
@@ -318,6 +363,7 @@ export class AdminService {
     const row = this.dbService.db
       .prepare(
         `SELECT a.id, a.code, a.username, a.status, a.last_password_changed_at, a.enabled, a.created_at,
+                a.current_password_ciphertext,
                 u.display_name AS current_user
          FROM scienceing_accounts a
          LEFT JOIN leases l ON l.account_id = a.id AND l.status = ?
@@ -334,6 +380,7 @@ export class AdminService {
       lastPasswordChangedAt: row.last_password_changed_at,
       enabled: row.enabled === 1,
       createdAt: row.created_at,
+      passwordProvisioned: isPasswordProvisioned(row.current_password_ciphertext),
     };
   }
 

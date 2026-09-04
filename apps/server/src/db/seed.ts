@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { defaultDatabasePath, nowIso } from './config';
 import { openDatabase } from './connection';
 import { migrate } from './migrate';
-import { ACCOUNT_STATUS, DEFAULT_SYSTEM_SETTINGS, USER_ROLE } from './constants';
+import { ACCOUNT_STATUS, DEFAULT_SYSTEM_SETTINGS, PLACEHOLDER_ACCOUNT_PASSWORD, USER_ROLE } from './constants';
 import {
   MANUAL_DEFAULT_CONTENT,
   MANUAL_DEFAULT_SLUG,
@@ -14,7 +14,8 @@ import { loadMasterKey } from '../crypto/master-key';
 import { encryptSecret, parsePayload, decryptSecret, serializePayload } from '../crypto/secret-box';
 
 export const SEED_ACCOUNT_CODES = Array.from({ length: 10 }, (_, i) => `KY-${String(i + 1).padStart(2, '0')}`);
-export const SEED_PLACEHOLDER_PASSWORD = '__PLACEHOLDER__';
+/** @deprecated 统一使用 db/constants 的 PLACEHOLDER_ACCOUNT_PASSWORD，此处仅保留兼容别名。 */
+export const SEED_PLACEHOLDER_PASSWORD = PLACEHOLDER_ACCOUNT_PASSWORD;
 export const DEFAULT_ADMIN_USERNAME = 'admin';
 
 export interface SeedOptions {
