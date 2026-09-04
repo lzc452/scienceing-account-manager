@@ -20,7 +20,8 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, openSync, rmSync, mkdirSync, copyFileSync, readdirSync, writeFileSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, openSync, rmSync, mkdirSync, mkdtempSync, copyFileSync, cpSync, readdirSync, writeFileSync, readFileSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   log, die, section, sleep, run, mergedEnv, readEnvFile, findNodeBin, loadConfig,
@@ -274,8 +275,53 @@ function syncDir(src, dst) {
   return count;
 }
 
+// markdown-it / dompurify / echarts 是 t13 新增的 web 运行时依赖。它们写进了
+// apps/web/package.json 与 pnpm-lock.yaml，但某些环境（如本机 pnpm 不可用、或
+// node_modules 被 pnpm install 重建后清理了“手工拷贝”的包）会缺失 → vite/rollup
+// 报 “failed to resolve import ... markdown.js / EChart.vue”。这里做幂等自检：
+// 缺失时才用 npm 在仓库外的临时目录安装并合并进 apps/web/node_modules
+// （与根目录 pnpm 工作区无关，避免 workspace 解析干扰）。
+const WEB_THIRD_PARTY_DEPS = ['markdown-it', 'dompurify', 'echarts'];
+
+function ensureWebDeps({ nodeBin }) {
+  const webNm = join(APP_WEB, 'node_modules');
+  const missing = WEB_THIRD_PARTY_DEPS.filter((name) => !existsSync(join(webNm, name, 'package.json')));
+  if (missing.length === 0) return;
+
+  section(`前端缺少第三方依赖，自动补装：${missing.join(' / ')}`);
+  const npmBin = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const tmp = mkdtempSync(join(tmpdir(), 'scienceing-webdeps-'));
+  writeFileSync(join(tmp, 'package.json'), JSON.stringify({ name: 'scienceing-webdeps-tmp', private: true }));
+  log(`在临时目录安装：${tmp}`);
+  const res = spawnSync(
+    npmBin,
+    ['install', '--no-audit', '--no-fund', '--ignore-scripts', ...WEB_THIRD_PARTY_DEPS.map((n) => `${n}@${n === 'echarts' ? '5.6.0' : n === 'dompurify' ? '3.2.4' : '14.1.0'}`)],
+    // Windows 下 npm.cmd 必须经 shell 启动，否则 spawnSync 直接 ENOENT
+    { cwd: tmp, stdio: 'inherit', shell: npmBin.endsWith('.cmd') },
+  );
+  if (res.error || res.status !== 0) {
+    die(`npm 补装失败（${res.error?.message ?? `退出码 ${res.status}`}，需要联网访问 registry.npmjs.org）。\n` +
+      `  若目标机无法联网：请在有网机器执行 pnpm install（lockfile 已含这三个包），或手工将依赖放入 ${webNm}`);
+  }
+
+  // 合并进 apps/web/node_modules：已存在的（如 pnpm 符号链接）一律跳过，避免破坏原布局
+  const srcNm = join(tmp, 'node_modules');
+  let copied = 0;
+  for (const entry of readdirSync(srcNm, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name === '.bin') continue;
+    const dest = join(webNm, entry.name);
+    if (existsSync(dest)) continue;
+    cpSync(join(srcNm, entry.name), dest, { recursive: true });
+    copied += 1;
+  }
+  const still = WEB_THIRD_PARTY_DEPS.filter((name) => !existsSync(join(webNm, name, 'package.json')));
+  if (still.length) die(`补装后仍缺少：${still.join(' / ')}（请在可联网机器执行 pnpm install）`);
+  log(`依赖已就绪（合并 ${copied} 个目录）`);
+}
+
 async function buildWeb({ nodeBin }) {
   section('构建前端（vite build）');
+  ensureWebDeps({ nodeBin });
   const vite = join(APP_WEB, 'node_modules', 'vite', 'bin', 'vite.js');
   if (!existsSync(vite)) die(`vite 不存在：${vite}（请先安装依赖 node_modules）`);
   const env = mergedEnv({ VITE_USE_MOCK: 'false', NODE_ENV: 'production' });
@@ -284,7 +330,30 @@ async function buildWeb({ nodeBin }) {
   // 抛 EPERM（文件被占用），中断的构建会把 index-*.js 写成 0 字节 → 整站白屏。
   // 暂存目录是“新文件写入”，不会撞锁；同步阶段即使个别文件失败也只是旧文件仍在。
   const stage = join(APP_WEB, 'dist-build');
-  await run(nodeBin, [vite, 'build', '--configLoader', 'native', '--outDir', 'dist-build', '--emptyOutDir', 'false'], { cwd: APP_WEB, env });
+  // 即便写暂存目录，个别同名产物（如 geist woff）仍可能被杀软/句柄瞬时占用而 EPERM，
+  // 属随机瞬时故障（vite 的 EPERM 细节只出现在子进程 stderr，异常不带关键词）：
+  // 因此失败一律自动重试最多 3 次；非瞬时错误（如 Rollup 解析失败）也会暴露在最终报错里。
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await run(nodeBin, [vite, 'build', '--configLoader', 'native', '--outDir', 'dist-build', '--emptyOutDir', 'false'], { cwd: APP_WEB, env });
+      lastError = null;
+      break;
+    } catch (err) {
+      lastError = err;
+      if (attempt < 3) {
+        log(`⚠ vite build 失败，2s 后自动重试（第 ${attempt + 1}/3 次）…`);
+        await sleep(2000);
+      }
+    }
+  }
+  if (lastError) {
+    die(`vite build 失败（已自动重试 3 次）：${String(lastError?.message ?? lastError).split('\n')[0]}\n` +
+      `  常见原因与处理：\n` +
+      `  ① Windows 瞬时 EPERM（文件被占用，报错含 EPERM/operation not permitted）→ 关闭占用 dist-build 的杀软/编辑器后重试，或临时改用全新目录：\n` +
+      `     cd apps/web && node node_modules/vite/bin/vite.js build --configLoader native --outDir dist-tmp\n` +
+      `  ② Rollup failed to resolve import（缺依赖）→ 确认已联网后重跑 deploy（会 npm 自动补装 markdown-it/dompurify/echarts），或先在有网机器执行 pnpm install`);
+  }
   if (!existsSync(join(stage, 'index.html'))) die('前端构建产物缺失 index.html');
   const n = syncDir(stage, WEB_DIST);
   if (!existsSync(join(WEB_DIST, 'index.html'))) die('前端产物同步失败：dist 缺少 index.html');
