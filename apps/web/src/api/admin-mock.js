@@ -80,6 +80,15 @@ const state = reactive({
       { key: 'reset-entry', label: '改密入口正常', ok: true },
     ],
   },
+  // 使用手册（t13）：content 初始为空串，首次访问时用 MANUAL_MOCK_CONTENT 兜底
+  manual: {
+    slug: 'user-guide',
+    title: '科应共享账号管理平台 · 使用手册（Mock）',
+    content: '',
+    updatedAt: '',
+    updatedByDisplayName: null,
+    isDefault: true,
+  },
 })
 
 function cloneUsers() {
@@ -357,6 +366,200 @@ async function runHealthCheck() {
   return { lastCheckedAt: state.health.lastCheckedAt, items: state.health.items.map((i) => ({ ...i })) }
 }
 
+/* ===================== 使用手册（t13） ===================== */
+
+const MANUAL_MOCK_CONTENT = `# 科应共享账号管理平台 · 使用手册（Mock）
+
+> 当前为前端内存 mock 数据，启动后端后显示管理员维护的完整手册。
+> 管理员在本页编辑后可「保存」，普通用户只读预览。
+
+## 1. 快速上手
+
+1. 登录看板；
+2. 点 **领取账号**；
+3. 点 **打开科应**；用完点 **立即归还**。
+
+![看板首页：账号余量与「领取账号」按钮](placeholder)
+
+## 2. 安装浏览器助手
+
+1. 顶栏下载 ZIP；
+2. 解压到固定文件夹（\`manifest.json\` 在根目录）；
+3. \`chrome://extensions\` → 开发者模式 → **加载已解压的扩展程序**。
+
+![Chrome 扩展管理页：开发者模式开关与「加载已解压的扩展程序」](placeholder)
+
+## 3. 校验方法
+
+刷新看板 → 顶栏出现绿色「助手已就绪」→ 打开科应后右下角出现倒计时悬浮窗。
+
+| 悬浮窗颜色 | 含义 |
+|---|---|
+| 绿色 | 正常 |
+| 黄色 | 即将到期 |
+| 红色 | 马上到期 |
+`
+
+async function getManual() {
+  await delay()
+  if (!state.manual.content) {
+    state.manual.content = MANUAL_MOCK_CONTENT
+    state.manual.updatedAt = new Date().toISOString()
+  }
+  return { ...state.manual }
+}
+
+async function updateManual({ title, content } = {}) {
+  await delay(300)
+  if (typeof title === 'string') state.manual.title = title
+  if (typeof content === 'string') state.manual.content = content
+  state.manual.updatedAt = new Date().toISOString()
+  state.manual.updatedByDisplayName = '管理员'
+  state.manual.isDefault = false
+  return { ...state.manual }
+}
+
+/* ===================== 数据看板（t13） ===================== */
+
+/** 稳定的伪随机（同一天同一指标得到同一值，避免每次刷新图表乱跳） */
+function pseudo(seed) {
+  const x = Math.sin(seed) * 10_000
+  return Math.abs(x - Math.floor(x))
+}
+
+function daySeries(days) {
+  const out = []
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const d = new Date(Date.now() - i * DAY)
+    out.push(d.toISOString().slice(0, 10))
+  }
+  return out
+}
+
+async function getDashboardStats(days = 30) {
+  await delay(320)
+  const range = Number(days) || 30
+  const days1 = daySeries(range)
+
+  const accounts = state.accounts
+  const countBy = (status) => accounts.filter((a) => a.status === status && a.enabled).length
+
+  const statusLabels = { AVAILABLE: '可用', IN_USE: '使用中', RECYCLING: '回收中', ERROR: '异常' }
+  const accountStatus = ['AVAILABLE', 'IN_USE', 'RECYCLING', 'ERROR'].map((name) => ({
+    name,
+    label: statusLabels[name],
+    value: countBy(name),
+  }))
+
+  const accountLoad = accounts
+    .map((a, index) => ({
+      accountId: a.id,
+      code: a.code,
+      username: a.username,
+      status: a.status,
+      claimCount: Math.round(pseudo(index + 1) * 26) + (a.status === 'IN_USE' ? 6 : 0),
+      totalMinutes: Math.round(pseudo(index + 7) * 2400) + 120,
+    }))
+    .sort((x, y) => y.claimCount - x.claimCount)
+    .slice(0, 10)
+
+  const topUsers = state.users
+    .filter((u) => u.role !== 'ADMIN')
+    .map((u, index) => ({
+      userId: u.id,
+      displayName: u.displayName,
+      department: u.department,
+      claimCount: Math.round(pseudo(index + 21) * 30) + 2,
+      totalMinutes: Math.round(pseudo(index + 33) * 3000) + 200,
+    }))
+    .sort((x, y) => y.claimCount - x.claimCount)
+    .slice(0, 10)
+
+  const claimTrend = days1.map((day, i) => ({
+    day,
+    count: Math.round(pseudo(i + 3) * 18) + (i % 7 === 0 || i % 7 === 6 ? 0 : 3),
+  }))
+
+  const resetTrend = days1.map((day, i) => ({
+    day,
+    success: Math.round(pseudo(i + 11) * 16) + 2,
+    failed: Math.round(pseudo(i + 41) * 3),
+  }))
+
+  const now = Date.now()
+  const ageDaysOf = (iso) => (iso ? Math.floor((now - new Date(iso).getTime()) / DAY) : null)
+  const counter = { d7: 0, d30: 0, d90: 0, older: 0, never: 0 }
+  const scored = accounts.map((a) => {
+    const age = ageDaysOf(a.lastPasswordChangedAt)
+    if (age === null) counter.never += 1
+    else if (age <= 7) counter.d7 += 1
+    else if (age <= 30) counter.d30 += 1
+    else if (age <= 90) counter.d90 += 1
+    else counter.older += 1
+    return { ...a, ageDays: age }
+  })
+
+  const abnormal = scored
+    .filter((a) => a.status === 'ERROR' || !a.enabled || a.ageDays === null || a.ageDays > 90)
+    .map((a) => ({
+      accountId: a.id,
+      code: a.code,
+      username: a.username,
+      status: a.status,
+      enabled: a.enabled,
+      lastPasswordChangedAt: a.lastPasswordChangedAt,
+      passwordAgeDays: a.ageDays,
+      lastError: a.status === 'ERROR' ? '科应后台重置超时（mock）' : null,
+      lastErrorAt: a.status === 'ERROR' ? ago(9 * MIN) : null,
+    }))
+
+  return {
+    range: { days: range, from: new Date(Date.now() - range * DAY).toISOString(), to: new Date().toISOString() },
+    overview: {
+      accountTotal: accounts.length,
+      accountEnabled: accounts.filter((a) => a.enabled).length,
+      accountDisabled: accounts.filter((a) => !a.enabled).length,
+      available: countBy('AVAILABLE'),
+      inUse: countBy('IN_USE'),
+      recycling: countBy('RECYCLING'),
+      error: countBy('ERROR'),
+      activeLeases: state.leases.filter((l) => l.status === 'ACTIVE').length,
+      activeUsers: new Set(state.leases.filter((l) => l.status === 'ACTIVE').map((l) => l.userDisplayName)).size,
+      avgLeaseMinutes: 42,
+      totalClaims: claimTrend.reduce((sum, d) => sum + d.count, 0),
+    },
+    accountStatus,
+    accountLoad,
+    passwordHealth: {
+      buckets: [
+        { label: '7 天内', count: counter.d7 },
+        { label: '8-30 天', count: counter.d30 },
+        { label: '31-90 天', count: counter.d90 },
+        { label: '90 天以上', count: counter.older },
+        { label: '从未改密', count: counter.never },
+      ],
+      neverChanged: counter.never,
+      abnormal,
+    },
+    resetJobs: {
+      success: resetTrend.reduce((s, d) => s + d.success, 0),
+      failed: resetTrend.reduce((s, d) => s + d.failed, 0),
+      pending: 1,
+      running: 0,
+      total: resetTrend.reduce((s, d) => s + d.success + d.failed, 0) + 1,
+      trend: resetTrend,
+    },
+    claimTrend,
+    topUsers,
+    releaseReasons: [
+      { name: 'USER_RETURN', label: '主动归还', value: 42 },
+      { name: 'INACTIVITY_TIMEOUT', label: '无操作超时', value: 11 },
+      { name: 'ADMIN_FORCE', label: '管理员强制回收', value: 4 },
+      { name: 'RESET_ERROR', label: '改密失败回收', value: 2 },
+    ],
+  }
+}
+
 export const adminMockApi = {
   listAccounts,
   forceRelease,
@@ -378,4 +581,7 @@ export const adminMockApi = {
   updateSettings,
   getExtensionConfig,
   runHealthCheck,
+  getManual,
+  updateManual,
+  getDashboardStats,
 }

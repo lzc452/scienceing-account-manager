@@ -78,6 +78,7 @@ export const AUDIT_ACTION = {
   PASSWORD_DECRYPT_FAILED: 'PASSWORD_DECRYPT_FAILED',
   USER_BULK_CREATE: 'USER_BULK_CREATE',
   ACCOUNT_RENAME: 'ACCOUNT_RENAME',
+  MANUAL_UPDATE: 'MANUAL_UPDATE',
 } as const;
 
 /** 审计结果 */
@@ -113,5 +114,6 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   ACCOUNT_BULK_CREATE: '批量导入科应账号',
   ACCOUNT_RENAME: '修改科应账号',
   SETTING_UPDATE: '参数更新',
+  MANUAL_UPDATE: '更新使用手册',
   PASSWORD_DECRYPT_FAILED: '密码解密失败',
 };

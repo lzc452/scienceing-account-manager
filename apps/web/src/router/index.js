@@ -21,7 +21,17 @@ const router = createRouter({
     { path: '/login', name: 'login', component: LoginPage },
     { path: '/my', name: 'my', component: MyAccountPage, meta: { requiresAuth: true } },
     { path: '/design', name: 'design', component: ComponentShowcase },
-    { path: '/admin', redirect: '/admin/accounts' },
+    // 使用手册：游客可读（只读渲染），管理员可在页内编辑。
+    // 懒加载：markdown-it/DOMPurify 只在进入手册页时加载。
+    { path: '/manual', name: 'manual', component: () => import('@/pages/ManualPage.vue') },
+    { path: '/admin', redirect: '/admin/dashboard' },
+    // 数据看板懒加载：echarts 体积较大，仅管理员访问看板时按需加载。
+    {
+      path: '/admin/dashboard',
+      name: 'admin-dashboard',
+      component: () => import('@/pages/admin/DashboardPage.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
     { path: '/admin/accounts', name: 'admin-accounts', component: AccountsPage, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/users', name: 'admin-users', component: UsersPage, meta: { requiresAuth: true, requiresAdmin: true } },
     { path: '/admin/leases', name: 'admin-leases', component: LeasesPage, meta: { requiresAuth: true, requiresAdmin: true } },

@@ -112,6 +112,24 @@ export function updateSettings(dto) {
   return USE_MOCK ? adminMockApi.updateSettings(dto) : http('POST', '/admin/settings', dto)
 }
 
+/** 使用手册（管理员读取，含编辑态需要的原始 Markdown）：GET /admin/manual */
+export function getAdminManual() {
+  return USE_MOCK ? adminMockApi.getManual() : http('GET', '/admin/manual')
+}
+
+/** 保存使用手册：PUT /admin/manual { title, content } */
+export function updateManual(dto) {
+  return USE_MOCK ? adminMockApi.updateManual(dto) : http('PUT', '/admin/manual', dto)
+}
+
+/** 数据看板统计：GET /admin/dashboard?days=7|30|90 */
+export function getDashboardStats(days = 30) {
+  if (USE_MOCK) return adminMockApi.getDashboardStats(days)
+  const qs = new URLSearchParams()
+  qs.set('days', String(days))
+  return http('GET', `/admin/dashboard?${qs.toString()}`)
+}
+
 export function getExtensionConfig() {
   return USE_MOCK ? adminMockApi.getExtensionConfig() : http('GET', '/extension/config')
 }

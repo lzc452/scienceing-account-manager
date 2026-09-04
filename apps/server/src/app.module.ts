@@ -9,6 +9,8 @@ import { AdminModule } from './modules/admin/admin.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { ExtensionModule } from './modules/extension/extension.module';
 import { SettingsModule } from './modules/settings/settings.module';
+import { ManualModule } from './modules/manual/manual.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { AutomationModule } from './modules/automation/automation.module';
 import { ResetModule } from './modules/reset/reset.module';
 import { HealthModule } from './health/health.module';
@@ -26,6 +28,8 @@ import { TimeoutScheduler } from './scheduler/timeout.service';
     AuditModule,
     ExtensionModule,
     SettingsModule,
+    ManualModule,
+    DashboardModule,
     AutomationModule,
     ResetModule,
     HealthModule,

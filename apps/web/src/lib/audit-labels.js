@@ -26,6 +26,7 @@ export const ACTION_LABELS = {
   ACCOUNT_BULK_CREATE: '批量导入科应账号',
   ACCOUNT_RENAME: '修改科应账号',
   SETTING_UPDATE: '参数更新',
+  MANUAL_UPDATE: '更新使用手册',
   PASSWORD_DECRYPT_FAILED: '密码解密失败',
 }
 

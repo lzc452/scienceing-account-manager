@@ -312,8 +312,41 @@ async function handleActivity(leaseId) {
 async function handleOpenDashboard(message) {
   const path = message?.path ?? '/';
   const url = `${DASHBOARD_URL}${path.startsWith('/') ? path : `/${path}`}`;
+
+  // 优先复用已打开的看板标签页：用户从看板点「打开科应」后，原看板 tab 仍留在后台，
+  // 悬浮窗的「归还账号 / 返回看板」应当聚焦那个 tab（目标 path 不同才导航过去），
+  // 而不是每次点击都新开一个标签页/窗口。仅当不存在任何看板标签时才新建。
+  let origin = '';
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    /* URL 异常时直接走兜底新建 */
+  }
+  if (origin) {
+    try {
+      const matches = await chrome.tabs.query({ url: `${origin}/*` });
+      if (matches.length > 0) {
+        // 多开场景选最近访问的 tab（lastAccessed Chrome 111+；缺失时退化为取最新 id）
+        const tab = matches.reduce(
+          (best, t) => (t.lastAccessed ?? t.id) > (best.lastAccessed ?? best.id) ? t : best,
+          matches[0],
+        );
+        if (tab.id != null) {
+          const patch = { active: true };
+          if (tab.url !== url) patch.url = url; // URL 一致则不刷新，仅聚焦
+          await chrome.tabs.update(tab.id, patch);
+          if (tab.windowId != null) await chrome.windows.update(tab.windowId, { focused: true });
+          console.log('[scienceing-extension] OPEN_DASHBOARD 复用看板标签页', { tabId: tab.id, url });
+          return { ok: true, tabId: tab.id, reused: true };
+        }
+      }
+    } catch (err) {
+      console.warn('[scienceing-extension] OPEN_DASHBOARD 查找看板标签失败，退回新建:', err);
+    }
+  }
+
   const tab = await chrome.tabs.create({ url, active: true });
-  return { ok: true, tabId: tab?.id ?? null };
+  return { ok: true, tabId: tab?.id ?? null, reused: false };
 }
 
 // ---------------------------------------------------------------------------

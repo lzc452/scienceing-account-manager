@@ -245,6 +245,14 @@ export function releaseLease(leaseId) {
   return USE_MOCK ? mockApi.release(leaseId) : http('POST', `/leases/${leaseId}/release`)
 }
 
+/**
+ * 使用手册（游客可读）：GET /api/manual
+ * 后端无记录时返回内置默认内容（isDefault=true）。
+ */
+export function getManual() {
+  return USE_MOCK ? mockApi.manual() : http('GET', '/manual')
+}
+
 /** mm:ss（§4.2 全站唯一倒计时格式，tabular-nums） */
 export function formatDuration(totalSeconds) {
   const s = Math.max(0, Math.floor(totalSeconds ?? 0))

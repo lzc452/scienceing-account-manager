@@ -202,6 +202,52 @@ async function release(id) {
   return { leaseId: id, status: 'RECYCLING', releaseReason: 'USER_RETURN' }
 }
 
+/**
+ * 使用手册（mock 精简版，仅用于无后端开发；真实内容由后端 manuals 表提供）。
+ * 图片用 `![](placeholder)` 占位，前端渲染为「待补充图片」提示框。
+ */
+const MANUAL_MOCK_CONTENT = `# 科应共享账号管理平台 · 使用手册（Mock）
+
+> 当前为前端内存 mock 数据，启动后端后显示管理员维护的完整手册。
+
+## 1. 三步用起来
+
+1. 登录看板（管理员分发的地址）；
+2. 点 **领取账号**；
+3. 点 **打开科应**，用完点 **立即归还**。
+
+![看板首页：账号余量与「领取账号」按钮](placeholder)
+
+## 2. 安装浏览器助手
+
+1. 顶栏下载 ZIP；
+2. 解压到固定文件夹（\`manifest.json\` 要在根目录）；
+3. Chrome 打开 \`chrome://extensions\` → 开发者模式 → **加载已解压的扩展程序**。
+
+![Chrome 扩展管理页：开发者模式开关与「加载已解压的扩展程序」](placeholder)
+
+## 3. 校验
+
+刷新看板，顶栏出现绿色「助手已就绪」即成功；打开科应后右下角应有倒计时悬浮窗。
+
+| 颜色 | 含义 |
+|---|---|
+| 绿色 | 正常 |
+| 黄色 | 即将到期 |
+| 红色 | 马上到期 |
+`
+
+function manual() {
+  return {
+    slug: 'user-guide',
+    title: '科应共享账号管理平台 · 使用手册（Mock）',
+    content: MANUAL_MOCK_CONTENT,
+    updatedAt: nowIso(),
+    updatedByDisplayName: null,
+    isDefault: true,
+  }
+}
+
 export const mockApi = {
   login,
   logout,
@@ -211,4 +257,5 @@ export const mockApi = {
   claim,
   current,
   release,
+  manual,
 }

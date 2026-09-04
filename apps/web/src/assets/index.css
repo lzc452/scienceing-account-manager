@@ -268,3 +268,215 @@
     animation: none;
   }
 }
+
+/* ==========================================================================
+ * 使用手册 Markdown 排版（t13，lib/markdown.js 渲染结果）
+ * 版面遵循无彩色分层：paper 承载正文，hairline 做表格/引用/代码边界。
+ * ========================================================================== */
+
+/* 手册正文卡片：纸面容器，与后台卡片同语言 */
+.md-article {
+  background-color: var(--color-paper);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-3xl);
+  box-shadow: var(--shadow-subtle);
+  padding: clamp(1.25rem, 4vw, 2.5rem);
+  max-width: 100%;
+  min-width: 0;
+}
+
+.md-body {
+  color: var(--color-ink);
+  font-size: 15px;
+  line-height: 1.75;
+  overflow-wrap: break-word;
+  /* 正文一律左对齐，杜绝 justify 造成的中文词间留白不均 */
+  text-align: left;
+}
+
+/* 标题：sticky 顶栏（h-14）遮挡时锚点仍可定位 */
+.md-body :is(h1, h2, h3, h4) {
+  scroll-margin-top: 4.5rem;
+}
+
+.md-body h1 {
+  font-size: 1.55em;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.75em;
+  padding-bottom: 0.5em;
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+.md-body h2 {
+  font-size: 1.3em;
+  font-weight: 650;
+  line-height: 1.45;
+  margin: 1.6em 0 0.6em;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+.md-body h3 {
+  font-size: 1.12em;
+  font-weight: 600;
+  line-height: 1.5;
+  margin: 1.4em 0 0.5em;
+}
+
+.md-body h4 {
+  font-size: 1em;
+  font-weight: 600;
+  margin: 1.2em 0 0.4em;
+}
+
+.md-body p {
+  margin: 0.6em 0;
+}
+
+.md-body ul,
+.md-body ol {
+  margin: 0.5em 0 0.8em;
+  padding-left: 1.6em;
+}
+
+.md-body li {
+  margin: 0.25em 0;
+}
+
+.md-body li > ul,
+.md-body li > ol {
+  margin: 0.15em 0;
+}
+
+.md-body a {
+  color: var(--color-ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--color-hairline);
+  transition: text-decoration-color 120ms ease;
+}
+
+.md-body a:hover {
+  text-decoration-color: var(--color-ink);
+}
+
+.md-body strong {
+  font-weight: 650;
+}
+
+.md-body code {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.875em;
+  background-color: var(--color-surface-alt);
+  border: 1px solid var(--color-hairline);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
+}
+
+/* 代码块：surface-alt 分区，靠 hairline 描边，禁止换行防表格式错位 */
+.md-body pre {
+  background-color: var(--color-surface-alt);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-lg);
+  padding: 0.9em 1.1em;
+  overflow-x: auto;
+  margin: 0.9em 0;
+  line-height: 1.6;
+}
+
+.md-body pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: 0.86em;
+}
+
+.md-body blockquote {
+  margin: 0.9em 0;
+  padding: 0.5em 1em;
+  background-color: var(--color-surface-alt);
+  border-left: 3px solid var(--color-hairline);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  color: var(--color-mid-gray);
+}
+
+.md-body blockquote p {
+  margin: 0.3em 0;
+}
+
+/* 表格：hairline 网格，表头 surface-alt */
+.md-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.9em 0;
+  font-size: 0.94em;
+  display: block;
+  overflow-x: auto;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-lg);
+}
+
+.md-body th,
+.md-body td {
+  border: 1px solid var(--color-hairline);
+  padding: 0.45em 0.9em;
+  text-align: left;
+  vertical-align: top;
+}
+
+.md-body th {
+  background-color: var(--color-surface-alt);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.md-body hr {
+  border: 0;
+  border-top: 1px solid var(--color-hairline);
+  margin: 2em 0;
+}
+
+.md-body img.md-figure {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-subtle);
+  margin: 0.8em 0;
+}
+
+/* —— 图片占位提示框（正文写 ![说明](placeholder) 时由渲染规则产出） —— */
+.md-figure-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin: 0.9em 0;
+  padding: 1.6em 1.2em;
+  background-color: var(--color-surface-alt);
+  border: 1.5px dashed var(--color-mid-gray);
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
+
+.md-figure-placeholder__badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-mid-gray);
+  border: 1px solid var(--color-hairline);
+  background-color: var(--color-paper);
+  border-radius: 999px;
+  padding: 0.15em 0.8em;
+  letter-spacing: 0.02em;
+}
+
+.md-figure-placeholder__text {
+  font-size: 13px;
+  color: var(--color-mid-gray);
+  line-height: 1.6;
+}

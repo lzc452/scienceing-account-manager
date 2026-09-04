@@ -13,7 +13,10 @@
     "@fontsource/geist-sans": "^5.1.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "dompurify": "^3.2.4",
+    "echarts": "^5.6.0",
     "lucide-vue-next": "^0.474.0",
+    "markdown-it": "^14.1.0",
     "tailwind-merge": "^3.0.2",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"

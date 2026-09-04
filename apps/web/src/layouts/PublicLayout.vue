@@ -70,10 +70,18 @@ function confirmLogout() {
         />
 
         <div class="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
+          <!-- 使用手册：游客 / 用户 / 管理员均可读（管理员在页内拥有编辑能力） -->
+          <RouterLink
+            to="/manual"
+            class="rounded-2xl px-2 py-1.5 text-sm text-mid-gray transition-colors hover:bg-surface-alt hover:text-ink"
+          >
+            使用手册
+          </RouterLink>
+
           <template v-if="isLoggedIn">
             <RouterLink
               v-if="isAdmin"
-              to="/admin/accounts"
+              to="/admin/dashboard"
               class="rounded-2xl px-2 py-1.5 text-sm text-mid-gray transition-colors hover:bg-surface-alt hover:text-ink"
             >
               管理后台

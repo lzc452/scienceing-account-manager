@@ -131,4 +131,19 @@ export const MIGRATIONS: Migration[] = [
       DELETE FROM system_settings WHERE key = 'inactivity_timeout_seconds';
     `,
   },
+  {
+    version: 4,
+    name: 'add_manuals',
+    // 使用手册（t13）：按 slug 存放 Markdown 长文本，游客可读、管理员可编辑。
+    // 独立于 system_settings，避免把大段文本灌进「系统参数」的全量读写里。
+    sql: `
+      CREATE TABLE IF NOT EXISTS manuals (
+        slug TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        updated_by INTEGER REFERENCES users(id),
+        updated_at TEXT NOT NULL
+      );
+    `,
+  },
 ];

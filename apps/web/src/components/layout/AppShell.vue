@@ -79,6 +79,7 @@ watch(() => route.fullPath, () => {
 const sidebarHidden = computed(() => !isDesktop.value && !drawerOpen.value)
 
 const navItems = [
+  { label: '数据看板', path: '/admin/dashboard' },
   { label: '账号管理', path: '/admin/accounts' },
   { label: '用户管理', path: '/admin/users' },
   { label: '租约记录', path: '/admin/leases' },

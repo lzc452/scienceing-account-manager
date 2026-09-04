@@ -4,6 +4,11 @@ import { defaultDatabasePath, nowIso } from './config';
 import { openDatabase } from './connection';
 import { migrate } from './migrate';
 import { ACCOUNT_STATUS, DEFAULT_SYSTEM_SETTINGS, USER_ROLE } from './constants';
+import {
+  MANUAL_DEFAULT_CONTENT,
+  MANUAL_DEFAULT_SLUG,
+  MANUAL_DEFAULT_TITLE,
+} from '../modules/manual/manual-default';
 import { hashPassword } from '../crypto/password';
 import { loadMasterKey } from '../crypto/master-key';
 import { encryptSecret, parsePayload, decryptSecret, serializePayload } from '../crypto/secret-box';
@@ -22,6 +27,7 @@ export interface SeedSummary {
   adminCreated: boolean;
   accountsInserted: number;
   settingsInserted: number;
+  manualsInserted: number;
   passwordsRepaired: number;
 }
 
@@ -95,10 +101,29 @@ export async function seedDatabase(db: DatabaseSync, options: SeedOptions = {}):
       settingsInserted += Number(result.changes);
     }
 
+    // 使用手册默认内容（t13）：已存在时不覆盖，管理员的修改优先
+    let manualsInserted = 0;
+    {
+      const result = db
+        .prepare(
+          `INSERT OR IGNORE INTO manuals (slug, title, content, updated_by, updated_at)
+           VALUES (?, ?, ?, NULL, ?)`,
+        )
+        .run(MANUAL_DEFAULT_SLUG, MANUAL_DEFAULT_TITLE, MANUAL_DEFAULT_CONTENT, now);
+      manualsInserted = Number(result.changes);
+    }
+
     const passwordsRepaired = repairUnreadablePasswords(db, masterKey);
 
     db.exec('COMMIT');
-    return { adminUsername: DEFAULT_ADMIN_USERNAME, adminCreated, accountsInserted, settingsInserted, passwordsRepaired };
+    return {
+      adminUsername: DEFAULT_ADMIN_USERNAME,
+      adminCreated,
+      accountsInserted,
+      settingsInserted,
+      manualsInserted,
+      passwordsRepaired,
+    };
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;
@@ -121,6 +146,7 @@ async function main(): Promise<void> {
     console.log(`  admin 用户: ${adminCount}（${summary.adminUsername}，新建=${summary.adminCreated}）`);
     console.log(`  科应账号: ${accountCount}（本次插入 ${summary.accountsInserted}）`);
     console.log(`  system_settings: ${summary.settingsInserted} 条`);
+    console.log(`  manuals: ${summary.manualsInserted} 条`);
     if (summary.passwordsRepaired > 0) {
       console.log(`  密码修复: ${summary.passwordsRepaired} 个账号密文已用当前主密钥重加密（占位密码）`);
     }
