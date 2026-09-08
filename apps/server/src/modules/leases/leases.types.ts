@@ -44,7 +44,7 @@ export interface LeaseView {
   releaseReason: string | null;
   expiresAt: string;
   remainingSeconds: number;
-  /** 无操作超时租期（秒，配置分钟数×60）——前端进度条/倒计时满刻度以此为准，勿本地硬编码。 */
+  /** 无操作超时租期（秒，配置小时数×3600）——前端进度条/倒计时满刻度以此为准，勿本地硬编码。 */
   timeoutSeconds: number;
 }
 

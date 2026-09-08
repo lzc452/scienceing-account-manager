@@ -210,9 +210,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 async function thresholdConfig() {
   const cfg = await getExtensionConfig();
   return {
-    warningSeconds: cfg.ok ? Number(cfg.warningSeconds ?? 300) : 300,
-    criticalWarningSeconds: cfg.ok ? Number(cfg.criticalWarningSeconds ?? 60) : 60,
-    inactivityTimeoutSeconds: cfg.ok ? Number(cfg.inactivityTimeoutSeconds ?? 1800) : 1800,
+    warningSeconds: cfg.ok ? Number(cfg.warningSeconds ?? 7200) : 7200,
+    criticalWarningSeconds: cfg.ok ? Number(cfg.criticalWarningSeconds ?? 3600) : 3600,
+    inactivityTimeoutSeconds: cfg.ok ? Number(cfg.inactivityTimeoutSeconds ?? 86400) : 86400,
   };
 }
 

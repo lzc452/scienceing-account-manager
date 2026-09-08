@@ -85,7 +85,7 @@ onBeforeUnmount(() => {
       {{ visible ? password : MASK }}
     </code>
 
-    <button
+    <!-- <button
       type="button"
       class="inline-flex h-8 shrink-0 items-center gap-1 rounded-2xl border border-hairline bg-transparent px-2.5 text-xs font-medium text-ink transition-colors hover:bg-surface-alt"
       :aria-label="visible ? '隐藏密码' : '显示密码'"
@@ -94,7 +94,7 @@ onBeforeUnmount(() => {
       <EyeOff v-if="visible" class="size-4" />
       <Eye v-else class="size-4" />
       {{ visible ? '隐藏' : '显示' }}
-    </button>
+    </button> -->
 
     <button
       type="button"

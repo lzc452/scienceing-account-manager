@@ -16,8 +16,8 @@ import { nowIso } from '../../db/config';
 import { isVersionAtLeast } from '../../lib/version';
 import type { AccountCredentialsView, AccountRow, LeaseRow, LeaseView } from './leases.types';
 
-/** 无操作超时默认 30 分钟（配置单位为分钟，见 system_settings.inactivity_timeout_minutes） */
-const DEFAULT_INACTIVITY_TIMEOUT_MINUTES = 30;
+/** 无操作超时默认 24 小时（配置单位为小时，见 system_settings.inactivity_timeout_hours） */
+const DEFAULT_INACTIVITY_TIMEOUT_HOURS = 24;
 const DEFAULT_MIN_EXTENSION_VERSION = '1.0.0';
 
 @Injectable()
@@ -253,7 +253,7 @@ export class LeasesService {
 
   /**
    * 超时回收（R6，PRD §25/§33）：条件原子 UPDATE，`last_activity_at <= threshold` 兜底，
-   * 保证「29:59.9 刚操作」不会被 30:00 的回收误踢。返回本次回收数。
+   * 保证「23:59:59.9 刚操作」不会被 24:00:00 的回收误踢。返回本次回收数。
    */
   recycleTimedOutLeases(): number {
     const db = this.dbService.db;
@@ -393,19 +393,19 @@ export class LeasesService {
   }
 
   /**
-   * 无操作超时（秒）：配置按「分钟」存于 inactivity_timeout_minutes（2026-09-03 起，
-   * 原 inactivity_timeout_seconds 已由迁移 v3 换算），此处换算成秒供超时判定/expiresAt 使用。
+   * 无操作超时（秒）：配置按「小时」存于 inactivity_timeout_hours，
+   * 此处换算成秒供超时判定/expiresAt 使用。
    */
   private inactivityTimeoutSeconds(): number {
     const row = this.dbService.db
       .prepare('SELECT value FROM system_settings WHERE key = ?')
-      .get('inactivity_timeout_minutes') as unknown as { value: string } | undefined;
+      .get('inactivity_timeout_hours') as unknown as { value: string } | undefined;
     if (row) {
-      const minutes = Number(row.value);
-      if (Number.isFinite(minutes) && minutes > 0) {
-        return Math.round(minutes * 60);
+      const hours = Number(row.value);
+      if (Number.isFinite(hours) && hours > 0) {
+        return Math.round(hours * 60 * 60);
       }
     }
-    return DEFAULT_INACTIVITY_TIMEOUT_MINUTES * 60;
+    return DEFAULT_INACTIVITY_TIMEOUT_HOURS * 60 * 60;
   }
 }

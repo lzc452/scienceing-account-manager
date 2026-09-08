@@ -301,12 +301,14 @@ export function getManual() {
   return USE_MOCK ? mockApi.manual() : http('GET', '/manual')
 }
 
-/** mm:ss（§4.2 全站唯一倒计时格式，tabular-nums） */
+/** 不足 1 小时显示 mm:ss，否则显示 HH:mm:ss（tabular-nums）。 */
 export function formatDuration(totalSeconds) {
   const s = Math.max(0, Math.floor(totalSeconds ?? 0))
-  const m = Math.floor(s / 60)
+  const hours = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
   const sec = s % 60
-  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+  const short = `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+  return hours > 0 ? `${String(hours).padStart(2, '0')}:${short}` : short
 }
 
 export { ApiError }

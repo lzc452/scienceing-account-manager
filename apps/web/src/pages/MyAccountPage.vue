@@ -16,10 +16,9 @@ import { Check, Copy } from 'lucide-vue-next'
 import { downloadExtensionZip, formatDuration, getCurrentLease, pluginState, releaseLease } from '@/api'
 import { toStatusKind } from '@/lib/status'
 
-// 进度条满刻度 = 后端下发的无操作超时租期（lease.timeoutSeconds），不再本地硬编码 30 分钟：
-// 管理员把超时改为 10 分钟时，进度条必须按 10 分钟满刻度从头递减，而不是显示在旧 30min 刻度的 2/3 处。
-// 兜底 1800 仅在后端未返回该字段（旧版本/异常）时使用。
-const FALLBACK_TIMEOUT_SECONDS = 1800
+// 进度条满刻度 = 后端下发的无操作超时租期（lease.timeoutSeconds）。
+// 兜底 24 小时仅在后端未返回该字段（旧版本/异常）时使用。
+const FALLBACK_TIMEOUT_SECONDS = 24 * 60 * 60
 
 const router = useRouter()
 

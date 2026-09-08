@@ -49,7 +49,7 @@ SELECT l.id, a.code, u.display_name, l.last_activity_at
  WHERE l.status = 'ACTIVE';
 ```
 
-- `last_activity_at` 距今 > 30 分钟却仍 `ACTIVE` → 回收调度器异常（正常应由 `TimeoutScheduler` 转 RECYCLING）。
+- `last_activity_at` 超过当前配置的无操作时长（默认 24 小时）却仍 `ACTIVE` → 回收调度器异常（正常应由 `TimeoutScheduler` 转 RECYCLING）。
 
 ### 2.4 数据库文件健康
 

@@ -14,7 +14,7 @@
  * 只使用四个核心状态：
  *
  *   AVAILABLE ──领取──▶ IN_USE ──Activity──▶ IN_USE
- *   IN_USE ──30分钟无操作/主动归还/管理员强制──▶ RECYCLING
+ *   IN_USE ──24小时无操作/主动归还/管理员强制──▶ RECYCLING
  *   RECYCLING ──密码重置成功──▶ AVAILABLE
  *   RECYCLING ──重置失败──▶ ERROR
  *   ERROR ──管理员重试──▶ RECYCLING
@@ -47,7 +47,7 @@ export enum LeaseStatus {
 export enum ReleaseReason {
   /** 用户主动归还（PRD §32） */
   USER_RETURN = 'USER_RETURN',
-  /** 30 分钟无操作超时（PRD §25） */
+  /** 24 小时无操作超时（PRD §25） */
   INACTIVITY_TIMEOUT = 'INACTIVITY_TIMEOUT',
   /** 管理员强制回收（PRD §52） */
   ADMIN_FORCE = 'ADMIN_FORCE',

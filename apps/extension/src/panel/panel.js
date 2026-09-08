@@ -1,4 +1,4 @@
-/* global chrome, document, setInterval */
+/* global chrome, document, setInterval, window */
 
 /**
  * 科应页面 Shadow DOM 悬浮窗（PRODUCT-DESIGN §7，PRD §20/§21/§44）。
@@ -11,9 +11,9 @@
  * - 环形逆时针倒计时，环内居中文字「释放时间」（8px）。
  * - 环色随剩余时间变化（阈值由后端 config 下发，管理员可在系统设置调整）：
  *   绿 = 距释放仍 > 即将释放提醒（warningSeconds）/ 黄 = 临界提醒前 / 红 = 临界提醒内（criticalWarningSeconds）。
- * - 环满刻度 = 整个无操作超时租期（inactivityTimeoutSeconds，默认 30min，后端下发，不再本地硬编码）。
+ * - 环满刻度 = 整个无操作超时租期（inactivityTimeoutSeconds，默认 24h，后端下发）。
  * - 点击面板展开小型浮层（账号 + 预计释放 + 立即归还 / 返回看板），避免常态化遮挡。
- * - 0–1min 自动弹出提醒弹窗（含实时倒计时）：继续使用 / 立即归还；倒计时归零后弹窗切换为
+ * - 0–1h 自动弹出提醒弹窗（含实时倒计时）：继续使用 / 立即归还；倒计时归零后弹窗切换为
  *   已释放态，仅保留「返回看板」按钮。
  *
  * 行为规则（§7.4）：
@@ -67,7 +67,15 @@
   let wrapper = null;
   let modalEl = null;
   let status = null;
-  let config = { warningSeconds: 300, criticalWarningSeconds: 60, inactivityTimeoutSeconds: 1800 };
+  const DEFAULT_WARNING_SECONDS = 2 * 60 * 60;
+  const DEFAULT_CRITICAL_WARNING_SECONDS = 60 * 60;
+  const DEFAULT_INACTIVITY_TIMEOUT_SECONDS = 24 * 60 * 60;
+
+  let config = {
+    warningSeconds: DEFAULT_WARNING_SECONDS,
+    criticalWarningSeconds: DEFAULT_CRITICAL_WARNING_SECONDS,
+    inactivityTimeoutSeconds: DEFAULT_INACTIVITY_TIMEOUT_SECONDS,
+  };
   let serviceError = false;
   let state = 'unbound';
   let expanded = false;
@@ -78,7 +86,7 @@
   let dragStart = null; // { x, y, px, py }
   let dragMoved = false;
 
-  const RING_MAX_SECONDS = 1800; // 默认刻度上限（无配置/非法配置时兜底 = 30min；实际值由 config.inactivityTimeoutSeconds 下发）
+  const RING_MAX_SECONDS = DEFAULT_INACTIVITY_TIMEOUT_SECONDS;
 
   // -------------------------------------------------------------------------
   // 状态推导（倒计时仅来自后端 expiresAt；连接异常时冻结）
@@ -105,16 +113,19 @@
     if (s !== 'ACTIVE') return 'released';
     const remaining = remainingSeconds();
     if (remaining <= 0) return 'released';
-    const critical = Number(config.criticalWarningSeconds ?? 60);
-    const warning = Number(config.warningSeconds ?? 300);
+    const critical = Number(config.criticalWarningSeconds ?? DEFAULT_CRITICAL_WARNING_SECONDS);
+    const warning = Number(config.warningSeconds ?? DEFAULT_WARNING_SECONDS);
     if (remaining <= critical) return 'critical';
     if (remaining <= warning) return 'warning';
     return 'normal';
   }
 
-  function mmss(total) {
+  function formatDuration(total) {
     const s = Math.max(0, Math.floor(total ?? 0));
-    return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    const hours = Math.floor(s / 3600);
+    const minutes = Math.floor((s % 3600) / 60);
+    const short = `${String(minutes).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    return hours > 0 ? `${String(hours).padStart(2, '0')}:${short}` : short;
   }
 
   function esc(value) {
@@ -140,11 +151,11 @@
   function ringColors(remaining) {
     if (state === 'released' || state === 'unbound') return COLORS.gray;
     if (state === 'error') return COLORS.amber;
-    const warning = Number(config.warningSeconds ?? 300);
-    const critical = Number(config.criticalWarningSeconds ?? 60);
-    if (remaining >= warning) return COLORS.green;
-    if (remaining >= critical) return COLORS.amber;
-    return COLORS.red;
+    const warning = Number(config.warningSeconds ?? DEFAULT_WARNING_SECONDS);
+    const critical = Number(config.criticalWarningSeconds ?? DEFAULT_CRITICAL_WARNING_SECONDS);
+    if (remaining <= critical) return COLORS.red;
+    if (remaining <= warning) return COLORS.amber;
+    return COLORS.green;
   }
 
   function ringRatio(remaining) {
@@ -182,13 +193,12 @@
 
   function popoverHtml() {
     if (!status) return '';
-    const c = ringColors(remainingSeconds());
     return `<div class="popover" role="dialog" aria-label="科应账号详情">
       <div class="ttl"><span class="dot" style="background:${dotColor()}"></span>科应共享账号</div>
       <div class="code">${esc(status.accountCode ?? '—')}</div>
       <div class="row"><span class="k">状态</span><span class="v">使用中 · ACTIVE</span></div>
-      <div class="row"><span class="k">无操作</span><span class="v" id="sci-exp-idle">${mmss(idleSeconds())}</span></div>
-      <div class="row"><span class="k">预计释放</span><span class="v" id="sci-exp-cd">${mmss(remainingSeconds())}</span></div>
+      <div class="row"><span class="k">无操作</span><span class="v" id="sci-exp-idle">${formatDuration(idleSeconds())}</span></div>
+      <div class="row"><span class="k">预计释放</span><span class="v" id="sci-exp-cd">${formatDuration(remainingSeconds())}</span></div>
       <div class="acts">
         <button class="btn ghost" data-action="dashboard">返回看板</button>
         <button class="btn danger" data-action="release">立即归还</button>
@@ -218,7 +228,6 @@
 
   function render() {
     const newState = deriveState();
-    const prev = state;
     state = newState;
 
     // 离开临界/已释放后，允许下次再弹临界提醒
@@ -251,12 +260,12 @@
   function updateDynamic() {
     updateRing();
     const expCd = wrapper.querySelector('#sci-exp-cd');
-    if (expCd) expCd.textContent = mmss(remainingSeconds());
+    if (expCd) expCd.textContent = formatDuration(remainingSeconds());
     const expIdle = wrapper.querySelector('#sci-exp-idle');
-    if (expIdle) expIdle.textContent = mmss(idleSeconds());
+    if (expIdle) expIdle.textContent = formatDuration(idleSeconds());
     if (modalMode === 'critical') {
       const mcd = modalEl?.querySelector('#sci-modal-cd');
-      if (mcd) mcd.textContent = mmss(remainingSeconds());
+      if (mcd) mcd.textContent = formatDuration(remainingSeconds());
     }
   }
 
@@ -277,7 +286,7 @@
     if (mode === 'critical') {
       return `<div class="box">
         <div class="big">⚠ 科应账号即将自动释放</div>
-        <div class="cap">预计 <b id="sci-modal-cd">${mmss(remainingSeconds())}</b> 后自动释放。继续操作科应页面即可保持使用。</div>
+        <div class="cap">预计 <b id="sci-modal-cd">${formatDuration(remainingSeconds())}</b> 后自动释放。继续操作科应页面即可保持使用。</div>
         <div class="row">
           <button class="btn ghost" data-act="dismiss">继续使用</button>
           <button class="btn danger" data-act="release">立即归还</button>

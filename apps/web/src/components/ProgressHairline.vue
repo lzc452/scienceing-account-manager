@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { cn } from '@/lib/utils'
 
 /**
- * 30 分钟使用进度细条（§5.3）：hairline 底 + ink 填充，纯形表达、无颜色语义。
+ * 可配置租期的使用进度细条（§5.3）：hairline 底 + ink 填充，纯形表达、无颜色语义。
  */
 const props = defineProps({
   /** 0–100 */

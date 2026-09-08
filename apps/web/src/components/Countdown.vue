@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { cn } from '@/lib/utils'
 
 /**
- * 倒计时 mm:ss（§4.2）：tabular-nums，每秒 tick；到 0 触发 `expire`。
+ * 倒计时不足 1 小时显示 mm:ss，否则显示 HH:mm:ss；每秒 tick，到 0 触发 `expire`。
  * 每秒 tick 不触发 aria-live（§9.2）。
  */
 const props = defineProps({
@@ -16,9 +16,11 @@ const emit = defineEmits(['expire'])
 const remaining = ref(Math.max(0, Math.floor(props.seconds)))
 
 function format(total) {
-  const m = Math.floor(total / 60)
+  const hours = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
   const s = total % 60
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  const short = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  return hours > 0 ? `${String(hours).padStart(2, '0')}:${short}` : short
 }
 
 const display = computed(() => format(remaining.value))

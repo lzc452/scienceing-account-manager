@@ -61,13 +61,13 @@ const state = reactive({
     { id: 4, userId: 4, accountId: 1, leaseId: 103, action: 'CLAIM_ACCOUNT', result: 'SUCCESS', ip: '10.2.1.9', userAgent: null, metadata: { accountCode: 'KY-01' }, createdAt: ago(DAY - 2 * HOUR) },
     { id: 3, userId: 3, accountId: 3, leaseId: 102, action: 'TIMEOUT', result: 'SUCCESS', ip: null, userAgent: null, metadata: { reason: 'INACTIVITY_TIMEOUT' }, createdAt: ago(2 * DAY) },
     { id: 2, userId: 3, accountId: 3, leaseId: 102, action: 'CLAIM_ACCOUNT', result: 'SUCCESS', ip: '10.2.1.10', userAgent: null, metadata: { accountCode: 'KY-03' }, createdAt: ago(2 * DAY - 30 * MIN) },
-    { id: 1, userId: 1, accountId: null, leaseId: null, action: 'SETTING_UPDATE', result: 'SUCCESS', ip: '10.2.1.8', userAgent: null, metadata: { keys: ['warning_seconds'] }, createdAt: ago(3 * DAY) },
+    { id: 1, userId: 1, accountId: null, leaseId: null, action: 'SETTING_UPDATE', result: 'SUCCESS', ip: '10.2.1.8', userAgent: null, metadata: { keys: ['warning_hours'] }, createdAt: ago(3 * DAY) },
   ],
   settings: {
-    // 无操作超时以「分钟」为单位（与后端 system_settings.inactivity_timeout_minutes 一致）
-    inactivity_timeout_minutes: '30',
-    warning_seconds: '300',
-    critical_warning_seconds: '60',
+    // 租约规则统一以整小时存储；扩展配置接口再换算成秒。
+    inactivity_timeout_hours: '24',
+    warning_hours: '2',
+    critical_warning_hours: '1',
     activity_throttle_seconds: '5',
     extension_min_version: '1.0.0',
     extension_latest_version: '1.3.0',
@@ -384,10 +384,10 @@ async function getExtensionConfig() {
     minimumVersion: state.settings.extension_min_version,
     latestVersion: state.settings.extension_latest_version,
     activityThrottleSeconds: Number(state.settings.activity_throttle_seconds),
-    warningSeconds: Number(state.settings.warning_seconds),
-    criticalWarningSeconds: Number(state.settings.critical_warning_seconds),
-    // 无操作超时（秒）：配置以分钟存储（inactivity_timeout_minutes），换算下发，与后端一致
-    inactivityTimeoutSeconds: Math.round(Number(state.settings.inactivity_timeout_minutes ?? 30) * 60),
+    warningSeconds: Math.round(Number(state.settings.warning_hours ?? 2) * 60 * 60),
+    criticalWarningSeconds: Math.round(Number(state.settings.critical_warning_hours ?? 1) * 60 * 60),
+    // 扩展协议继续使用秒，兼容已安装版本。
+    inactivityTimeoutSeconds: Math.round(Number(state.settings.inactivity_timeout_hours ?? 24) * 60 * 60),
     // 真实部署下由 deploy-lan 打包生成（apps/web/dist/downloads/extension.json）
     package: {
       available: true,

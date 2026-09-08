@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* global console, process, setTimeout */
 /**
  * 科应共享账号管理平台 —— 一键开发环境启动
  *
@@ -6,9 +7,10 @@
  *   1. 环境预检（Node 版本 + node:sqlite 可用性）
  *   2. 依赖安装（node_modules 缺失时才执行）
  *   3. 环境变量（生成并持久化 .env / .env.local）
- *   4. 编译后端（dist 过期或缺失时才执行）
- *   5. 数据库迁移 + 种子（幂等，可重复执行）
- *   6. 启动后端（:3000/api）+ 前端（:5173），按前缀区分日志
+ *   4. 生成可下载的浏览器扩展 ZIP
+ *   5. 编译后端（dist 过期或缺失时才执行）
+ *   6. 数据库迁移 + 种子（幂等，可重复执行）
+ *   7. 启动后端（:3000/api）+ 前端（:5173），按前缀区分日志
  *
  * 设计取舍：
  * - **零第三方依赖**：仅用 Node 内置模块，不引入 concurrently / nodemon，
@@ -33,6 +35,10 @@ import { existsSync, readFileSync, statSync, writeFileSync, readdirSync, rmSync 
 import { createConnection } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  DEVELOPMENT_EXTENSION_DOWNLOAD_DIR,
+  packDevelopmentExtension,
+} from './lib/development-extension-package.mjs'
 
 // ────────────────────────────── 常量 ──────────────────────────────
 
@@ -78,7 +84,7 @@ if (flags.help) {
   console.log(`
 科应共享账号管理平台 —— 一键启动
 
-  pnpm dev                 装依赖 → 生成 .env → 编译 → 迁移 → 种子 → 后端 + 前端
+  pnpm dev                 装依赖 → 生成 .env → 打包扩展 → 编译 → 迁移 → 种子 → 后端 + 前端
   pnpm dev --only=server   只启动后端（:3000/api）
   pnpm dev --only=web      只启动前端（:5173，需后端已运行）
   pnpm dev --reset         删除 data/scienceing.db 后重建（迁移 + 种子）
@@ -249,7 +255,7 @@ async function ensureDependencies() {
 /** 极简 .env 解析：支持 # 注释、export 前缀、单双引号、去 BOM */
 function parseEnvFile(content) {
   const result = new Map()
-  for (const rawLine of content.replace(/^﻿/, '').split(/\r?\n/)) {
+  for (const rawLine of content.replace(/^\uFEFF/, '').split(/\r?\n/)) {
     const line = rawLine.trim()
     if (!line || line.startsWith('#')) continue
     const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line)
@@ -341,7 +347,21 @@ async function ensureEnv() {
   return { adminPassword }
 }
 
-// ───────────────────── 4. 编译后端 ─────────────────────
+// ───────────────────── 4. 浏览器扩展下载包 ─────────────────────
+
+async function prepareExtensionPackage() {
+  step('生成浏览器扩展 ZIP')
+  await run('pnpm', ['--filter', '@scienceing/extension', 'build'])
+  const webPort = Number(process.env.WEB_PORT ?? FRONTEND_PORT)
+  const pkg = packDevelopmentExtension({ dashboardOrigin: `http://localhost:${webPort}` })
+
+  // 后端 GET /api/extension/config 从同一目录读取元数据；Vite 则把 public/
+  // 原样托管到站点根路径，二者共同指向 /downloads/scienceing-extension.zip。
+  process.env.EXTENSION_DOWNLOAD_DIR = DEVELOPMENT_EXTENSION_DOWNLOAD_DIR
+  info(`扩展包已生成 → ${pkg.zipPath}（${Math.ceil(pkg.size / 1024)} KB）`)
+}
+
+// ───────────────────── 5. 编译后端 ─────────────────────
 
 async function buildServer() {
   step('编译后端')
@@ -359,7 +379,7 @@ async function buildServer() {
   info('编译完成 → apps/server/dist')
 }
 
-// ───────────────────── 5. 数据库：迁移 + 种子 ─────────────────────
+// ───────────────────── 6. 数据库：迁移 + 种子 ─────────────────────
 
 async function setupDatabase() {
   step('数据库迁移与种子')
@@ -610,6 +630,8 @@ async function main() {
   const needBackend = flags.only === 'all' || flags.only === 'server'
   const needFrontend = flags.only === 'all' || flags.only === 'web'
 
+  if (needBackend || needFrontend) await prepareExtensionPackage()
+
   // --only=web 时后端由用户自行运行，无需编译建库（但库必须已存在）
   let adminState = { exists: false, matches: false }
   if (needBackend) {
@@ -630,6 +652,7 @@ async function main() {
   console.log(`  账号池看板   ${color('cyan', `http://localhost:${webPort}`)}`)
   console.log(`  管理后台     ${color('cyan', `http://localhost:${webPort}/admin`)}`)
   console.log(`  后端 API     ${color('cyan', `http://localhost:${process.env.PORT ?? BACKEND_PORT}/api`)}`)
+  console.log(`  扩展 ZIP     ${color('cyan', `http://localhost:${webPort}/downloads/scienceing-extension.zip`)}`)
   if (adminState.matches) {
     console.log(`  管理员账号   ${color('green', `admin / ${adminPassword}`)} ${color('yellow', '（本地开发默认口令，首次登录后请修改）')}`)
   } else if (adminState.exists) {

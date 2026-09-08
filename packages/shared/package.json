@@ -14,14 +14,14 @@
     },
     "./password-policy": {
       "types": "./password-policy.d.ts",
-      "import": "./password-policy.cjs",
+      "import": "./password-policy.js",
       "require": "./password-policy.cjs",
-      "default": "./password-policy.cjs"
+      "default": "./password-policy.js"
     }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
-    "test": "node --test test/password-policy.test.cjs"
+    "test": "node --test test/password-policy.test.cjs test/password-policy-import.test.mjs"
   }
 }

@@ -88,8 +88,8 @@ window.addEventListener('message', (e) => {
 - **监听**：仅 `pointerdown / keydown / wheel / touchstart`，且 `event.isTrusted === true`；不监听 `mousemove`（PRD §17.2）。
 - **排除插件 UI**：通过 `event.composedPath()` 判断是否命中 `#__scienceing_account_assistant__`，命中即 return（点击「立即归还」不续期，PRD §44）。
 - **节流**：content script 本地 2s 粗节流 → worker 5~10s 合并（读 config `activityThrottleSeconds`，夹紧 5~10）→ `POST /api/leases/{id}/activity`，body 仅 `{ leaseToken, event:'activity' }`（PRD §9，不采集搜索词/正文/输入/Cookie/密码）。
-- **悬浮窗（缩小面板）**（Shadow DOM `#__scienceing_account_assistant__`，右下角 48×48，radius 10px，白底）：默认仅显示「预计释放时间环」——环形逆时针倒计时，环内居中文字「释放时间」（8px）。环色随剩余时间：5–30min 绿 / 1–5min 黄 / 0–1min 红（数据源仅后端 `expiresAt`）。点击面板展开小型浮层（账号 + 预计释放 + 立即归还 / 返回看板）。
-  - ① 正常（绿环）② 警告（黄环，剩余 1–5min）③ 临界（红环，剩余 <1min，自动弹一次提醒 Modal：继续使用 / 立即归还，含实时倒计时）④ 已释放（灰环「已释放」+ 弹窗仅「返回看板」）⑤ 连接异常（琥珀环「异常」，冻结本地倒计时）。另有未绑定（灰环「未绑」）。
+- **悬浮窗（缩小面板）**（Shadow DOM `#__scienceing_account_assistant__`，右下角 48×48，radius 10px，白底）：默认仅显示「预计释放时间环」——环形逆时针倒计时，环内居中文字「释放时间」（8px）。环色随剩余时间：超过 2h 绿 / 1–2h 黄 / 不超过 1h 红（数据源仅后端 `expiresAt`）。点击面板展开小型浮层（账号 + 预计释放 + 立即归还 / 返回看板）。
+  - ① 正常（绿环）② 警告（黄环，剩余 1–2h）③ 临界（红环，剩余 ≤1h，自动弹一次提醒 Modal：继续使用 / 立即归还，含实时倒计时）④ 已释放（灰环「已释放」+ 弹窗仅「返回看板」）⑤ 连接异常（琥珀环「异常」，冻结本地倒计时）。另有未绑定（灰环「未绑」）。
 - **倒计时**：数据源仅后端 `expiresAt`；本地每 1s 只做渲染，不自行决定 `last_activity_at`（PRD §19）。
 - **立即归还**：Shadow DOM 确认弹窗 → 打开看板 `/my` 完成释放确认（release 端点需用户会话，扩展按 PRD §43 只持有 leaseToken，不存用户会话，故跳转看板完成）。
 
@@ -104,8 +104,8 @@ window.addEventListener('message', (e) => {
 ### t10（Activity / 悬浮窗）
 
 1. **Activity 续期**：绑定后，在科应页真实点击/滚动/按键 → Worker 控制台 `POST /api/leases/{id}/activity`；后端 `last_activity_at` 更新（DB 或 `/api/leases/{id}/status` 验证），悬浮窗「无操作」回到 ~00:00。
-2. **倒计时刷新**：悬浮窗「预计释放」每 1s 递减；操作页面后回到 ~30:00。
-3. **阈值态切换**：临时把 `system_settings` 的 `warning_seconds` 调到 >30min、`critical_warning_seconds` 调大（或直接改 `GET /api/extension/config` 阈值）观察 ②/③ 态；临界态 Modal 只弹一次。
+2. **倒计时刷新**：悬浮窗「预计释放」每 1s 递减；操作页面后回到 ~24:00:00。
+3. **阈值态切换**：临时调整 `system_settings.warning_hours`、`critical_warning_hours`（管理端单位为小时；`GET /api/extension/config` 仍以秒下发）观察 ②/③ 态；临界态 Modal 只弹一次。
 4. **立即归还不续期**：点击悬浮窗「立即归还」→ 确认弹窗 → 打开看板 `/my`；期间不触发 `REPORT_ACTIVITY`（Worker 控制台无新增 activity POST）。
 
 ## 权限与隐私（PRD §9 / §43 / §44）

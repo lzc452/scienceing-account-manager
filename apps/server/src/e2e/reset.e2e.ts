@@ -71,14 +71,17 @@ after(async () => {
   await app.close();
 });
 
-/** 领取 → 拨回 31 分钟 → 超时回收，返回 {accountId, leaseId}。 */
+/** 领取 → 拨回 24 小时 1 分钟 → 超时回收，返回 {accountId, leaseId}。 */
 async function claimAndTimeout(): Promise<{ accountId: number; leaseId: number }> {
   const claim = await claimAsExtension(app, userToken);
   assert.equal(claim.status, 201);
   const accountId = claim.body.lease.accountId as number;
   const leaseId = claim.body.lease.id as number;
 
-  db.prepare('UPDATE leases SET last_activity_at = ? WHERE id = ?').run(new Date(Date.now() - 31 * 60 * 1000).toISOString(), leaseId);
+  db.prepare('UPDATE leases SET last_activity_at = ? WHERE id = ?').run(
+    new Date(Date.now() - (24 * 60 + 1) * 60 * 1000).toISOString(),
+    leaseId,
+  );
   const recycled = app.get(LeasesService).recycleTimedOutLeases();
   assert.equal(recycled, 1);
   return { accountId, leaseId };

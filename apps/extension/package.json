@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node scripts/validate.mjs",
     "validate": "node scripts/validate.mjs",
-    "test": "node --test test/version.test.mjs test/claim.test.mjs",
-    "check": "node scripts/validate.mjs && node --test test/version.test.mjs test/claim.test.mjs"
+    "test": "node --test test/version.test.mjs test/claim.test.mjs test/password-visibility.test.mjs",
+    "check": "node scripts/validate.mjs && node --test test/version.test.mjs test/claim.test.mjs test/password-visibility.test.mjs"
   }
 }

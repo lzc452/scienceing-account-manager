@@ -26,6 +26,7 @@
     },
     {
       "matches": ["https://www.scienceing.com/*", "https://scienceing.com/*"],
+      "css": ["src/content/scienceing/password-protection.css"],
       "js": ["src/content/scienceing/scienceing.js", "src/panel/panel.js"],
       "run_at": "document_idle",
       "all_frames": false

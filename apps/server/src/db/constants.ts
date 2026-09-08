@@ -44,10 +44,10 @@ export const USER_ROLE = {
 
 /** 系统设置默认值（与 @scienceing/shared DEFAULT_SYSTEM_SETTINGS 一致，PRD §39/§40） */
 export const DEFAULT_SYSTEM_SETTINGS: Record<string, string> = {
-  // 无操作超时以「分钟」为单位配置（2026-09-03 起，原先为秒）；后端内部换算成秒做超时判定。
-  inactivity_timeout_minutes: '30',
-  warning_seconds: '300',
-  critical_warning_seconds: '60',
+  // 三条租约规则统一按「小时」配置；后端内部换算成秒做超时判定与扩展协议下发。
+  inactivity_timeout_hours: '24',
+  warning_hours: '2',
+  critical_warning_hours: '1',
   activity_throttle_seconds: '5',
   extension_min_version: '1.0.0',
   extension_latest_version: '1.3.0',

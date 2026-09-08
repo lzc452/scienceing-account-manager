@@ -130,22 +130,25 @@ test('leases / logs / settings / extension config 端点', async () => {
 
   const settings = await request(app.getHttpServer()).get('/api/admin/settings').set('Authorization', `Bearer ${adminToken}`);
   assert.equal(settings.status, 200);
-  assert.equal(settings.body.inactivity_timeout_minutes, '30');
+  assert.equal(settings.body.inactivity_timeout_hours, '24');
+  assert.equal(settings.body.warning_hours, '2');
+  assert.equal(settings.body.critical_warning_hours, '1');
 
-  // 更新为 20 分钟 → extension config 应按 20*60=1200 秒下发
+  // 管理端统一按小时配置；扩展协议继续按秒下发，兼容已安装版本。
   const upd = await request(app.getHttpServer())
     .post('/api/admin/settings')
     .set('Authorization', `Bearer ${adminToken}`)
-    .send({ inactivity_timeout_minutes: '20' });
+    .send({ inactivity_timeout_hours: '12', warning_hours: '2', critical_warning_hours: '1' });
   assert.equal(upd.status, 201);
-  assert.equal(upd.body.inactivity_timeout_minutes, '20');
+  assert.equal(upd.body.inactivity_timeout_hours, '12');
 
   const ext = await request(app.getHttpServer()).get('/api/extension/config');
   assert.equal(ext.status, 200);
   assert.equal(ext.body.minimumVersion, '1.0.0');
   assert.equal(typeof ext.body.activityThrottleSeconds, 'number');
-  // 无操作超时分钟×60 实时下发（扩展悬浮窗环满刻度据此适配，协议保持秒）
-  assert.equal(ext.body.inactivityTimeoutSeconds, 1200);
+  assert.equal(ext.body.inactivityTimeoutSeconds, 12 * 60 * 60);
+  assert.equal(ext.body.warningSeconds, 2 * 60 * 60);
+  assert.equal(ext.body.criticalWarningSeconds, 60 * 60);
 });
 
 test('审计日志写入且不含敏感值', async () => {

@@ -68,12 +68,10 @@ export class ExtensionController {
       minimumVersion: settings['extension_min_version'] ?? '1.0.0',
       latestVersion: settings['extension_latest_version'] ?? '1.3.0',
       activityThrottleSeconds: Number(settings['activity_throttle_seconds'] ?? 5),
-      warningSeconds: Number(settings['warning_seconds'] ?? 300),
-      criticalWarningSeconds: Number(settings['critical_warning_seconds'] ?? 60),
-      // 无操作超时：管理员配置单位为「分钟」（inactivity_timeout_minutes，默认 30），
-      // 对扩展协议仍下发「秒」（inactivityTimeoutSeconds）——悬浮窗环满刻度/倒计时按秒计算，
-      // 已发布扩展无需升级；换算与回收判定（leases/accounts）保持一致。
-      inactivityTimeoutSeconds: this.numericSetting(settings, 'inactivity_timeout_minutes', 30) * 60,
+      // 管理端三条租约规则统一按小时配置；扩展协议继续按秒下发，兼容已安装版本。
+      warningSeconds: this.numericSetting(settings, 'warning_hours', 2) * 60 * 60,
+      criticalWarningSeconds: this.numericSetting(settings, 'critical_warning_hours', 1) * 60 * 60,
+      inactivityTimeoutSeconds: this.numericSetting(settings, 'inactivity_timeout_hours', 24) * 60 * 60,
       // 下载包信息：前端「下载助手 / 下载最新版 ZIP」据此给出真实入口
       package: readPackage(),
     };

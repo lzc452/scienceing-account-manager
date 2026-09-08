@@ -47,7 +47,7 @@
 
 > 同一个科应账号同一时间只能存在一个有效租约。
 
-### 2.3 准确判断连续 30 分钟无操作
+### 2.3 准确判断连续 24 小时无操作
 
 由于科应没有开放 API，浏览器扩展只在科应页面工作，监听真实用户操作：
 
@@ -74,7 +74,7 @@
 当后台确认：
 
 ```text
-当前时间 - last_activity_at >= 30分钟
+当前时间 - last_activity_at >= 配置的无操作时长（默认24小时）
 ```
 
 立即进入回收流程：
@@ -106,7 +106,7 @@ ACTIVE
 - 不自动填写科应登录密码，第一版仍由用户复制；
 - 不试图与科应自己的 30 分钟内部定时器完全同步。
 
-本平台有自己独立的 30 分钟 Activity 规则。
+本平台有自己独立的租约 Activity 规则，默认连续 24 小时无操作自动释放。
 
 ---
 
@@ -881,8 +881,8 @@ last_activity_at = database NOW()
 │ KY-03                  │
 │ 张三                   │
 │                        │
-│ 无操作：02:14           │
-│ 预计释放：27:46         │
+│ 无操作：00:02:14        │
+│ 预计释放：23:57:46      │
 │                        │
 │ [立即归还]              │
 └────────────────────────┘
@@ -892,7 +892,7 @@ last_activity_at = database NOW()
 
 ```text
 ┌────────────────┐
-│ 🟢 KY-03 27:46 │
+│ 🟢 KY-03 23:57:46 │
 └────────────────┘
 ```
 
@@ -900,21 +900,21 @@ last_activity_at = database NOW()
 
 # 21. 即将释放提醒
 
-## 21.1 25分钟
+## 21.1 剩余2小时
 
 悬浮窗变为警告状态：
 
 ```text
-⚠ 已连续25分钟无操作
+⚠ 已连续22小时无操作
 
-04:59后自动释放账号
+01:59:59后自动释放账号
 
 继续操作科应页面即可保持使用。
 ```
 
 不强制弹 Modal。
 
-## 21.2 29分钟
+## 21.2 剩余1小时
 
 弹一次提醒：
 
@@ -922,9 +922,9 @@ last_activity_at = database NOW()
 ┌────────────────────────────┐
 │ ⚠ 科应账号即将自动释放      │
 │                            │
-│ 已连续29分钟无操作          │
+│ 已连续23小时无操作          │
 │                            │
-│ 00:59 后自动释放            │
+│ 00:59:59 后自动释放         │
 │                            │
 │ 继续操作页面即可保持使用。   │
 │                            │
@@ -992,7 +992,7 @@ stateDiagram-v2
 
     IN_USE --> IN_USE: 用户产生Activity
 
-    IN_USE --> RECYCLING: 30分钟无操作
+    IN_USE --> RECYCLING: 达到配置的无操作时长（默认24小时）
     IN_USE --> RECYCLING: 用户主动归还
     IN_USE --> RECYCLING: 管理员强制回收
 
@@ -1051,14 +1051,14 @@ released_reason = INACTIVITY_TIMEOUT
 
 ---
 
-# 25. 30分钟自动释放核心流程
+# 25. 租约超时自动释放核心流程
 
 后台每 10～30 秒检查一次：
 
 ```text
 status = ACTIVE
 AND
-last_activity_at <= NOW() - 30分钟
+last_activity_at <= NOW() - 配置的无操作时长（默认24小时）
 ```
 
 发现满足条件以后，必须用原子条件更新：
@@ -1090,7 +1090,7 @@ sequenceDiagram
     EXT->>API: Activity
     API->>DB: last_activity_at = NOW()
 
-    Note over API,DB: 连续30分钟无新的Activity
+    Note over API,DB: 达到配置的无操作时长（默认24小时）
 
     API->>DB: ACTIVE → RECYCLING
     API->>Q: 创建RESET_PASSWORD任务
@@ -1322,7 +1322,7 @@ await expect(
 
 # 32. 主动归还流程
 
-用户不需要等 30 分钟。
+用户不需要等到 24 小时超时。
 
 科应页面悬浮窗：
 
@@ -1424,7 +1424,7 @@ RECYCLING
 
 建议业务定义：
 
-> 连续约 30 分钟没有有效操作自动释放。
+> 连续达到配置的无操作时长（默认 24 小时）没有有效操作即自动释放。
 
 不要承诺毫秒级精确等同于科应自己的 Session 定时器。
 
@@ -1489,7 +1489,7 @@ RECYCLING
 │        [打开科应]             │
 │                              │
 │ 最后操作：2分钟前             │
-│ 预计自动释放：28:04           │
+│ 预计自动释放：23:58:04        │
 │                              │
 │        [立即归还]             │
 └──────────────────────────────┘
@@ -1739,9 +1739,9 @@ value
 例如：
 
 ```text
-inactivity_timeout_seconds = 1800
-warning_seconds = 300
-critical_warning_seconds = 60
+inactivity_timeout_hours = 24
+warning_hours = 2
+critical_warning_hours = 1
 extension_min_version = 1.0.0
 ```
 
@@ -1802,7 +1802,9 @@ GET /api/extension/config
 {
   "minimumVersion": "1.0.0",
   "activityThrottleSeconds": 5,
-  "warningSeconds": 300
+  "warningSeconds": 7200,
+  "criticalWarningSeconds": 3600,
+  "inactivityTimeoutSeconds": 86400
 }
 ```
 
@@ -2017,7 +2019,7 @@ return
 
 后台自然不会再收到 Activity。
 
-30分钟后：
+达到配置的无操作时长后（默认 24 小时）：
 
 ```text
 自动释放
@@ -2222,13 +2224,13 @@ flowchart TD
     V --> W[last_activity=NOW]
     W --> T
 
-    U -- 无 --> X{无操作达到25分钟}
+    U -- 无 --> X{剩余时间不超过2小时}
 
     X -- 否 --> T
 
     X -- 是 --> Y[显示即将释放提醒]
 
-    Y --> Z{30分钟前是否重新操作}
+    Y --> Z{释放前是否重新操作}
 
     Z -- 是 --> V
 
@@ -2525,12 +2527,12 @@ ExtensionModule
 只有真实 Activity：
 
 ```text
-续期30分钟
+续期至当前时间后的24小时
 ```
 
 ### R6
 
-30分钟无 Activity：
+24小时无 Activity：
 
 ```text
 强制回收
@@ -2639,7 +2641,7 @@ Lease绑定
 Scienceing状态浮窗
 Activity监听
 last_activity
-30分钟倒计时
+24小时倒计时
 ```
 
 暂时到期只：
@@ -2650,7 +2652,7 @@ last_activity
 
 目标：
 
-> 验证“30分钟无操作判断”是否可靠。
+> 验证“24小时无操作判断”是否可靠。
 
 ---
 
@@ -2679,7 +2681,7 @@ ERROR状态
 接通：
 
 ```text
-30分钟无操作
+24小时无操作
 ↓
 RECYCLING
 ↓
@@ -2731,9 +2733,9 @@ A已有KY-01
 ### 场景4：正常Activity
 
 ```text
-用户第29分钟滚动Scienceing
+用户在租约到期前滚动Scienceing
 ↓
-倒计时恢复约30分钟
+倒计时恢复约24小时
 ```
 
 ### 场景5：页面挂机
@@ -2741,7 +2743,7 @@ A已有KY-01
 ```text
 打开Scienceing
 ↓
-30分钟完全无操作
+24小时完全无操作
 ↓
 自动回收
 ```
@@ -2753,7 +2755,7 @@ A已有KY-01
 ↓
 关闭浏览器
 ↓
-30分钟后自动回收
+24小时后自动回收
 ```
 
 ### 场景7：主动归还
@@ -2771,7 +2773,7 @@ AVAILABLE
 ### 场景8：自动回收
 
 ```text
-30分钟无操作
+24小时无操作
 ↓
 自动改密
 ↓
@@ -2817,7 +2819,7 @@ flowchart LR
 
     ACT[真实Activity]
 
-    TIMEOUT{30分钟无操作?}
+    TIMEOUT{达到配置的无操作时长?}
 
     RESET[Playwright重置密码]
 
@@ -2871,7 +2873,7 @@ Lease
 =
 判断该Lease是否存在真实操作
 
-30分钟计时器
+可配置的24小时计时器
 =
 决定Lease是否失效
 
@@ -2894,7 +2896,7 @@ AVAILABLE
 领取
 → 使用
 → Activity续期
-→ 30分钟无操作
+→ 24小时无操作
 → 自动改密
 → 强制退出
 → 自动释放

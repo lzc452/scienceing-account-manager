@@ -17,16 +17,16 @@ const checking = ref(false)
 
 /** 租约规则表单元数据：驱动 v-for 渲染，保证三条规则的响应式行为完全一致 */
 const RULES = [
-  // 无操作超时以「分钟」为单位（2026-09-03 起，原秒；后端换算成秒做回收判定/倒计时下发）
-  { key: 'inactivity_timeout_minutes', label: '无操作超时（分钟）' },
-  { key: 'warning_seconds', label: '即将释放提醒（秒）' },
-  { key: 'critical_warning_seconds', label: '临界提醒（秒）' },
+  // 管理端统一以整小时配置；后端换算成秒做回收判定和扩展倒计时下发。
+  { key: 'inactivity_timeout_hours', label: '无操作超时（小时）' },
+  { key: 'warning_hours', label: '即将释放提醒（小时）' },
+  { key: 'critical_warning_hours', label: '临界提醒（小时）' },
 ]
 
 const leaseRules = ref({
-  inactivity_timeout_minutes: '30',
-  warning_seconds: '300',
-  critical_warning_seconds: '60',
+  inactivity_timeout_hours: '24',
+  warning_hours: '2',
+  critical_warning_hours: '1',
 })
 
 const extensionConfig = ref({ minimumVersion: '1.0.0', latestVersion: '1.3.0' })
@@ -38,9 +38,9 @@ async function load() {
   try {
     const [settings, ext] = await Promise.all([getSettings(), getExtensionConfig()])
     leaseRules.value = {
-      inactivity_timeout_minutes: settings.inactivity_timeout_minutes ?? '30',
-      warning_seconds: settings.warning_seconds ?? '300',
-      critical_warning_seconds: settings.critical_warning_seconds ?? '60',
+      inactivity_timeout_hours: settings.inactivity_timeout_hours ?? '24',
+      warning_hours: settings.warning_hours ?? '2',
+      critical_warning_hours: settings.critical_warning_hours ?? '1',
     }
     extensionConfig.value = ext
   } catch (e) {
@@ -142,6 +142,8 @@ function formatDate(iso) {
                 <Input
                   v-model="leaseRules[rule.key]"
                   type="number"
+                  min="1"
+                  step="1"
                   class="w-full max-w-[140px] text-right tabular-nums"
                 />
                 <Button

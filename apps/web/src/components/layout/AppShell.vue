@@ -26,7 +26,7 @@ const DESKTOP_QUERY = '(min-width: 1024px)'
  */
 const props = defineProps({
   adminName: { type: String, default: 'admin' },
-  version: { type: String, default: 'v1.0.0' },
+  version: { type: String, default: 'v1.3.0' },
   /** 兼容旧签名：内容栏宽度（新布局下 Content 恒为全宽，此参数仅保留兼容） */
   contentWidth: { type: String, default: 'default' },
 })

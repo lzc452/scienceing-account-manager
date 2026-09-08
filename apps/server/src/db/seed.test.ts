@@ -2,8 +2,89 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { openDatabase } from './connection';
 import { migrate } from './migrate';
+import { MIGRATIONS } from './migrations';
 import { seedDatabase } from './seed';
 import { decryptSecret, encryptSecret, parsePayload, serializePayload } from '../crypto/secret-box';
+
+function readLeaseRuleSettings(db: ReturnType<typeof openDatabase>): Record<string, string> {
+  const rows = db
+    .prepare("SELECT key, value FROM system_settings WHERE key LIKE '%_hours' ORDER BY key")
+    .all() as Array<{ key: string; value: string }>;
+  return Object.fromEntries(rows.map((row) => [row.key, row.value]));
+}
+
+test('新数据库使用 24/2/1 小时租约规则默认值', () => {
+  const db = openDatabase(':memory:');
+
+  try {
+    migrate(db);
+    assert.deepEqual(readLeaseRuleSettings(db), {
+      critical_warning_hours: '1',
+      inactivity_timeout_hours: '24',
+      warning_hours: '2',
+    });
+  } finally {
+    db.close();
+  }
+});
+
+test('租约规则小时迁移保留自定义时长并清理旧单位键', () => {
+  const db = openDatabase(':memory:');
+  const migration = MIGRATIONS.find((item) => item.name === 'settings_lease_rule_hours');
+  assert.ok(migration);
+
+  try {
+    db.exec(`
+      CREATE TABLE system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO system_settings (key, value) VALUES
+        ('inactivity_timeout_minutes', '90'),
+        ('warning_seconds', '7201'),
+        ('critical_warning_seconds', '1');
+    `);
+
+    db.exec(migration.sql);
+
+    assert.deepEqual(readLeaseRuleSettings(db), {
+      critical_warning_hours: '1',
+      inactivity_timeout_hours: '2',
+      warning_hours: '3',
+    });
+    const legacyCount = db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM system_settings WHERE key IN ('inactivity_timeout_minutes','warning_seconds','critical_warning_seconds')",
+      )
+      .get() as { count: number };
+    assert.equal(legacyCount.count, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test('租约规则小时迁移将旧默认值升级为新的 24/2/1 默认值', () => {
+  const db = openDatabase(':memory:');
+  const migration = MIGRATIONS.find((item) => item.name === 'settings_lease_rule_hours');
+  assert.ok(migration);
+
+  try {
+    db.exec(`
+      CREATE TABLE system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO system_settings (key, value) VALUES
+        ('inactivity_timeout_minutes', '30'),
+        ('warning_seconds', '300'),
+        ('critical_warning_seconds', '60');
+    `);
+
+    db.exec(migration.sql);
+
+    assert.deepEqual(readLeaseRuleSettings(db), {
+      critical_warning_hours: '1',
+      inactivity_timeout_hours: '24',
+      warning_hours: '2',
+    });
+  } finally {
+    db.close();
+  }
+});
 
 test('seed 遇到无法解密的账号密码时保留原密文并失败退出', async () => {
   const db = openDatabase(':memory:');

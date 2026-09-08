@@ -12,15 +12,16 @@ import { isPasswordAllowed, passwordPolicyMessage } from '@scienceing/shared/pas
  *   普通用户 zhangsan / mock-user
  *   首次登录强制改密演示 xinyuan / initial-pass-1（mustChangePassword=true，登录后强制弹改密窗）
  */
-const INACTIVITY_TIMEOUT_SECONDS = 1800 // 30 分钟
+const HOUR_SECONDS = 60 * 60
+const INACTIVITY_TIMEOUT_SECONDS = 24 * HOUR_SECONDS
 
 const state = reactive({
   user: null,
   token: null,
   pool: [
     { id: 1, code: 'KY-01', status: 'AVAILABLE' },
-    { id: 2, code: 'KY-02', status: 'IN_USE', expiresAt: isoFromNow(28 * 60 + 4) },
-    { id: 3, code: 'KY-03', status: 'IN_USE', expiresAt: isoFromNow(11 * 60 + 20) },
+    { id: 2, code: 'KY-02', status: 'IN_USE', expiresAt: isoFromNow(22 * HOUR_SECONDS + 4 * 60) },
+    { id: 3, code: 'KY-03', status: 'IN_USE', expiresAt: isoFromNow(HOUR_SECONDS + 20 * 60) },
     { id: 4, code: 'KY-04', status: 'RECYCLING' },
     { id: 5, code: 'KY-05', status: 'ERROR' },
     { id: 6, code: 'KY-06', status: 'AVAILABLE' },

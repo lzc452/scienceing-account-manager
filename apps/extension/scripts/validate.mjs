@@ -4,7 +4,7 @@
  * 检查项：
  *  1. manifest.json 可解析且 manifest_version === 3；
  *  2. 未申请超出「最小权限」清单的 permission；
- *  3. manifest 引用的 background/content_scripts js 文件与 lib 依赖均存在。
+ *  3. manifest 引用的 background/content_scripts JS/CSS 文件与 lib 依赖均存在。
  */
 /* global console, process */
 import { readFile, stat } from 'node:fs/promises';
@@ -46,7 +46,9 @@ for (const permission of manifest.permissions ?? []) {
 
 const referencedFiles = [];
 if (manifest.background?.service_worker) referencedFiles.push(manifest.background.service_worker);
-for (const cs of manifest.content_scripts ?? []) referencedFiles.push(...(cs.js ?? []));
+for (const cs of manifest.content_scripts ?? []) {
+  referencedFiles.push(...(cs.js ?? []), ...(cs.css ?? []));
+}
 referencedFiles.push('src/lib/version.js', 'src/lib/config.js', 'src/lib/claim.js');
 
 for (const file of referencedFiles) {

@@ -35,7 +35,7 @@ const dialogOpen = ref(false)
 const switchOn = ref(true)
 const username = ref('')
 const filter = ref('all')
-const countdownSeconds = 27 * 60 + 46
+const countdownSeconds = 23 * 60 * 60 + 57 * 60 + 46
 
 const statusKinds = ['available', 'in_use', 'recycling', 'error', 'released']
 
@@ -187,7 +187,7 @@ const filterOptions = [
               <TableRow>
                 <TableCell class="font-medium">KY-02</TableCell>
                 <TableCell><Badge tone="in_use" /></TableCell>
-                <TableCell class="text-mid-gray">28:04 后释放</TableCell>
+                <TableCell class="text-mid-gray">23:58:04 后释放</TableCell>
               </TableRow>
               <TableRow>
                 <TableCell class="font-medium">KY-03</TableCell>

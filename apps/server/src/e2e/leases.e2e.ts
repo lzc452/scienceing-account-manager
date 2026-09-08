@@ -91,6 +91,8 @@ test('游客可访问账号池列表（匿名，不含密码/密文，IN_USE 有
   resetPool();
   const claim = await claimAsExtension(app, u1Token);
   const claimedCode = claim.body.lease.accountCode as string;
+  const claimedExpiresAt = claim.body.lease.expiresAt as string;
+  assert.equal(claim.body.lease.timeoutSeconds, 24 * 60 * 60);
 
   const res = await request(app.getHttpServer()).get('/api/accounts/pool');
   assert.equal(res.status, 200);
@@ -110,6 +112,7 @@ test('游客可访问账号池列表（匿名，不含密码/密文，IN_USE 有
     if (item.status === 'IN_USE') {
       assert.ok(item.estimatedReleaseAt, 'IN_USE 应有 estimatedReleaseAt');
       assert.equal(item.code, claimedCode);
+      assert.equal(item.estimatedReleaseAt, claimedExpiresAt);
     } else {
       assert.equal(item.estimatedReleaseAt, null);
     }
@@ -237,28 +240,28 @@ test('Activity 续期/过期状态机 + 归还创建 reset_job', async () => {
   assert.equal(renewAfter.body.result, 'LEASE_EXPIRED');
 });
 
-test('竞态：29:59 刚操作不被 30:00 回收误踢（条件更新 R6）', async () => {
+test('竞态：23:59 刚操作不被 24:00 回收误踢（条件更新 R6）', async () => {
   resetPool();
   const claim = await claimAsExtension(app, u1Token);
   const leaseId = claim.body.lease.id as number;
   const leaseToken = claim.body.leaseToken as string;
 
-  // 模拟 29 分钟无操作，随后用户操作续期成功（last_activity_at 回到 now）
-  db.prepare('UPDATE leases SET last_activity_at = ? WHERE id = ?').run(nowIso(-29 * 60 * 1000), leaseId);
+  // 模拟 23 小时 59 分钟无操作，随后用户操作续期成功（last_activity_at 回到 now）
+  db.prepare('UPDATE leases SET last_activity_at = ? WHERE id = ?').run(nowIso(-(23 * 60 + 59) * 60 * 1000), leaseId);
   const renew = await request(app.getHttpServer())
     .post(`/api/leases/${leaseId}/activity`)
     .set('Authorization', `Bearer ${leaseToken}`)
     .send({});
   assert.equal(renew.body.result, 'ACTIVE');
 
-  // 30:00 定时回收触发：last_activity_at 已刷新，不应误踢
+  // 24:00 定时回收触发：last_activity_at 已刷新，不应误踢
   const leasesService = app.get(LeasesService);
   assert.equal(leasesService.recycleTimedOutLeases(), 0);
   const stillActive = db.prepare('SELECT status FROM leases WHERE id = ?').get(leaseId) as unknown as { status: string };
   assert.equal(stillActive.status, 'ACTIVE');
 
-  // 拨回 31 分钟前 → 回收器应回收（ACTIVE→RECYCLING + account RECYCLING + reset_job）
-  db.prepare('UPDATE leases SET last_activity_at = ? WHERE id = ?').run(nowIso(-31 * 60 * 1000), leaseId);
+  // 拨回 24 小时 1 分钟前 → 回收器应回收（ACTIVE→RECYCLING + account RECYCLING + reset_job）
+  db.prepare('UPDATE leases SET last_activity_at = ? WHERE id = ?').run(nowIso(-(24 * 60 + 1) * 60 * 1000), leaseId);
   assert.equal(leasesService.recycleTimedOutLeases(), 1);
   const lease = db.prepare('SELECT status, release_reason, account_id FROM leases WHERE id = ?').get(leaseId) as unknown as {
     status: string;

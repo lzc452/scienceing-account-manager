@@ -32,15 +32,15 @@
 </head>
 <body>
   <h1>科应悬浮窗 · 48px 环形倒计时预览</h1>
-  <p class="sub">环形逆时针倒计时 · 环内「释放时间」8px · 绿(5–30min) / 黄(1–5min) / 红(0–1min)。下面是复用 panel.js 同一套 <code>ringPath</code> / <code>ringColors</code> 逻辑的静态与实时演示。</p>
+  <p class="sub">环形逆时针倒计时 · 环内「释放时间」8px · 绿(&gt;2h) / 黄(1–2h) / 红(≤1h)。下面是复用 panel.js 同一套 <code>ringPath</code> / <code>ringColors</code> 逻辑的静态与实时演示。</p>
 
   <div class="grid" id="staticGrid"></div>
 
   <div class="controls">
     <span class="cap">实时倒计时（每 1s）：</span>
-    <button class="ghost" onclick="setLive(1740)">设 29:00（绿）</button>
-    <button class="ghost" onclick="setLive(240)">设 04:00（黄）</button>
-    <button class="ghost" onclick="setLive(45)">设 00:45（红）</button>
+    <button class="ghost" onclick="setLive(82800)">设 23:00:00（绿）</button>
+    <button class="ghost" onclick="setLive(5400)">设 01:30:00（黄）</button>
+    <button class="ghost" onclick="setLive(2700)">设 45:00（红）</button>
     <button class="ghost" onclick="setLive(0)">设 00:00（已释放）</button>
   </div>
   <div class="grid" id="liveGrid" style="margin-top:16px;"></div>
@@ -50,8 +50,8 @@
     <div class="ppop" id="dragpop" style="display:none">
       <div class="ttl">科应共享账号</div>
       <div class="row"><span class="k">状态</span><span class="v">使用中 · ACTIVE</span></div>
-      <div class="row"><span class="k">无操作</span><span class="v" id="d-idle">00:12</span></div>
-      <div class="row"><span class="k">预计释放</span><span class="v" id="d-cd">--:--</span></div>
+      <div class="row"><span class="k">无操作</span><span class="v" id="d-idle">00:00:12</span></div>
+      <div class="row"><span class="k">预计释放</span><span class="v" id="d-cd">--:--:--</span></div>
     </div>
     <div class="ring-host" id="dragring" title="拖拽移动 · 点击查看使用中信息" tabindex="0" role="button" aria-label="科应账号倒计时，拖拽移动，点击查看使用中信息"></div>
   </div>
@@ -63,7 +63,7 @@
     red:    { ring:'#ef4444', label:'#dc2626' },
     gray:   { ring:'#d4d4d4', label:'#737373' },
   };
-  const RING_MAX_SECONDS = 1800;
+  const RING_MAX_SECONDS = 24 * 60 * 60;
   function ringPath(ratio) {
     const cx=24, cy=24, r=19;
     if (ratio >= 0.9999) return `M ${cx} ${(cy-r).toFixed(2)} A ${r} ${r} 0 1 0 ${cx} ${(cy+r).toFixed(2)} A ${r} ${r} 0 1 0 ${cx} ${(cy-r).toFixed(2)} Z`;
@@ -76,11 +76,16 @@
   }
   function ringRatio(remaining){ if (remaining<=0) return 0; return Math.max(0, Math.min(1, remaining/RING_MAX_SECONDS)); }
   function ringColors(remaining){
-    if (remaining >= 300) return COLORS.green;
-    if (remaining >= 60) return COLORS.amber;
-    return COLORS.red;
+    if (remaining <= 3600) return COLORS.red;
+    if (remaining <= 7200) return COLORS.amber;
+    return COLORS.green;
   }
-  function mmss(s){ s=Math.max(0,Math.floor(s||0)); return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0'); }
+  function formatDuration(s){
+    s=Math.max(0,Math.floor(s||0));
+    const hours=Math.floor(s/3600), minutes=Math.floor((s%3600)/60);
+    const short=String(minutes).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
+    return hours>0 ? String(hours).padStart(2,'0')+':'+short : short;
+  }
 
   function ringHtml(remaining, labelOverride){
     const c = remaining > 0 ? ringColors(remaining) : COLORS.gray;
@@ -93,9 +98,9 @@
 
   // 静态样例
   const samples = [
-    { remaining: 1740, label: '29:00 · 绿' },
-    { remaining: 240,  label: '04:00 · 黄' },
-    { remaining: 45,   label: '00:45 · 红' },
+    { remaining: 82800, label: '23:00:00 · 绿' },
+    { remaining: 5400,  label: '01:30:00 · 黄' },
+    { remaining: 2700,  label: '45:00 · 红' },
     { remaining: 0,    label: '00:00 · 已释放' },
   ];
   const sg = document.getElementById('staticGrid');
@@ -106,12 +111,12 @@
   });
 
   // 实时样例
-  let liveRemaining = 1740;
+  let liveRemaining = 82800;
   const lg = document.getElementById('liveGrid');
   function renderLive(){
     lg.innerHTML = '';
     const cell = document.createElement('div'); cell.className='cell';
-    cell.innerHTML = ringHtml(liveRemaining) + `<div class="cap">实时：${mmss(liveRemaining)}（${liveRemaining>=300?'绿':liveRemaining>=60?'黄':'红/已释放'}）</div>`;
+    cell.innerHTML = ringHtml(liveRemaining) + `<div class="cap">实时：${formatDuration(liveRemaining)}（${liveRemaining>7200?'绿':liveRemaining>3600?'黄':'红/已释放'}）</div>`;
     lg.appendChild(cell);
   }
   function setLive(v){ liveRemaining = v; renderLive(); }
@@ -154,7 +159,7 @@
     if (!m) {
       const show = dpop.style.display !== 'block';
       dpop.style.display = show ? 'block' : 'none';
-      if (show) { document.getElementById('d-cd').textContent = mmss(liveRemaining); }
+      if (show) { document.getElementById('d-cd').textContent = formatDuration(liveRemaining); }
     }
   }
   dring.addEventListener('keydown', (e) => {
@@ -163,7 +168,7 @@
   function dup2(){
     const show = dpop.style.display !== 'block';
     dpop.style.display = show ? 'block' : 'none';
-    if (show) document.getElementById('d-cd').textContent = mmss(liveRemaining);
+    if (show) document.getElementById('d-cd').textContent = formatDuration(liveRemaining);
   }
 </script>
 </body>

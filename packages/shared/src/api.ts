@@ -156,7 +156,7 @@ export interface ExtensionConfigDto {
   activityThrottleSeconds: number;
   warningSeconds: number;
   criticalWarningSeconds: number;
-  /** 无操作超时（秒）：管理端配置单位为分钟（inactivity_timeout_minutes），服务端换算后下发，悬浮窗环满刻度/倒计时以此为准 */
+  /** 无操作超时（秒）：管理端配置单位为小时（inactivity_timeout_hours），服务端换算后下发，悬浮窗环满刻度/倒计时以此为准 */
   inactivityTimeoutSeconds: number;
   /** 浏览器扩展分发包（deploy-lan 部署时生成到 /downloads/scienceing-extension.zip） */
   package: ExtensionPackageDto;
