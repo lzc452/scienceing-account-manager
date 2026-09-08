@@ -29,7 +29,6 @@ export interface SeedSummary {
   accountsInserted: number;
   settingsInserted: number;
   manualsInserted: number;
-  passwordsRepaired: number;
 }
 
 /** 未显式提供管理员口令时生成强随机口令并打印一次（不落码/不落 Git，PRD §42）。 */
@@ -41,33 +40,39 @@ function generateAdminPassword(): string {
 }
 
 /**
- * 自愈：库内密文若无法用当前主密钥解密（典型场景：换了 SCIENCEING_MASTER_KEY），
- * 领取账号时解密会 500。种子阶段用当前密钥把占位密码重新加密，保证可用。
- * 真实业务密文无法恢复明文，只能由管理员走「重置密码」流程重新生成。
+ * 启动前验证已有账号密文与当前主密钥匹配。
+ *
+ * 密文不可读通常意味着 SCIENCEING_MASTER_KEY 配置错误。此时必须失败退出并保留原始
+ * 密文，不能用占位密码“修复”，否则恢复正确密钥后也无法找回真实密码。
  */
-function repairUnreadablePasswords(db: DatabaseSync, masterKey: Buffer): number {
+function assertPasswordsReadable(db: DatabaseSync, masterKey: Buffer): void {
   const rows = db
     .prepare('SELECT id, code, current_password_ciphertext FROM scienceing_accounts')
     .all() as Array<{ id: number; code: string; current_password_ciphertext: string | null }>;
-  let repaired = 0;
+  const unreadableCodes: string[] = [];
   for (const row of rows) {
     if (!row.current_password_ciphertext) continue;
     try {
       decryptSecret(parsePayload(row.current_password_ciphertext), masterKey);
     } catch {
-      const ciphertext = serializePayload(encryptSecret(SEED_PLACEHOLDER_PASSWORD, masterKey));
-      db.prepare('UPDATE scienceing_accounts SET current_password_ciphertext = ? WHERE id = ?').run(ciphertext, row.id);
-      repaired += 1;
-      console.warn(`[seed] 账号 ${row.code} 密文无法用当前主密钥解密，已重置为占位密码`);
+      unreadableCodes.push(row.code);
     }
   }
-  return repaired;
+  if (unreadableCodes.length > 0) {
+    throw new Error(
+      `[seed] ${unreadableCodes.length} 个账号密文无法用当前主密钥解密（${unreadableCodes.join(', ')}）。`
+      + '已保留原始密文，请恢复创建这些密文时使用的 SCIENCEING_MASTER_KEY。',
+    );
+  }
 }
 
 /** 种子数据：admin 用户 + 10 个 KY-01~KY-10 账号（密码占位，pending=null）+ system_settings 默认值。 */
 export async function seedDatabase(db: DatabaseSync, options: SeedOptions = {}): Promise<SeedSummary> {
   const masterKey = options.masterKey ?? loadMasterKey();
   const now = nowIso();
+
+  // 必须先于任何种子写入执行，密钥错误时保证数据库零改动。
+  assertPasswordsReadable(db, masterKey);
 
   db.exec('BEGIN');
   try {
@@ -77,8 +82,9 @@ export async function seedDatabase(db: DatabaseSync, options: SeedOptions = {}):
       const adminPassword = options.adminPassword ?? process.env.ADMIN_INITIAL_PASSWORD ?? generateAdminPassword();
       const passwordHash = await hashPassword(adminPassword);
       db.prepare(`
-        INSERT INTO users (username, display_name, department, password_hash, role, enabled, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+        INSERT INTO users
+          (username, display_name, department, password_hash, role, enabled, must_change_password, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?)
       `).run(DEFAULT_ADMIN_USERNAME, '管理员', 'IT', passwordHash, USER_ROLE.ADMIN, now, now);
       adminCreated = true;
     }
@@ -114,8 +120,6 @@ export async function seedDatabase(db: DatabaseSync, options: SeedOptions = {}):
       manualsInserted = Number(result.changes);
     }
 
-    const passwordsRepaired = repairUnreadablePasswords(db, masterKey);
-
     db.exec('COMMIT');
     return {
       adminUsername: DEFAULT_ADMIN_USERNAME,
@@ -123,7 +127,6 @@ export async function seedDatabase(db: DatabaseSync, options: SeedOptions = {}):
       accountsInserted,
       settingsInserted,
       manualsInserted,
-      passwordsRepaired,
     };
   } catch (err) {
     db.exec('ROLLBACK');
@@ -148,9 +151,6 @@ async function main(): Promise<void> {
     console.log(`  科应账号: ${accountCount}（本次插入 ${summary.accountsInserted}）`);
     console.log(`  system_settings: ${summary.settingsInserted} 条`);
     console.log(`  manuals: ${summary.manualsInserted} 条`);
-    if (summary.passwordsRepaired > 0) {
-      console.log(`  密码修复: ${summary.passwordsRepaired} 个账号密文已用当前主密钥重加密（占位密码）`);
-    }
     console.log(`  账号样本: ${accounts.map((a) => `${a.code}:${a.status}`).join(' ')}`);
     console.log(`  密码占位: ${SEED_PLACEHOLDER_PASSWORD}（pending=null）`);
   } finally {

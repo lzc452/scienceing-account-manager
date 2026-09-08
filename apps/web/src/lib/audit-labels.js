@@ -9,6 +9,7 @@ export const ACTION_LABELS = {
   USER_CREATE: '新增用户',
   USER_UPDATE: '修改用户',
   USER_PASSWORD_RESET: '重置用户密码',
+  PASSWORD_CHANGE: '修改登录密码',
   USER_BULK_CREATE: '批量导入用户',
   CLAIM_ACCOUNT: '领取账号',
   ACTIVITY: '活跃上报',

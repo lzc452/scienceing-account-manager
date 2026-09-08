@@ -11,10 +11,17 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./password-policy": {
+      "types": "./password-policy.d.ts",
+      "import": "./password-policy.cjs",
+      "require": "./password-policy.cjs",
+      "default": "./password-policy.cjs"
     }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc -p tsconfig.build.json"
+    "build": "tsc -p tsconfig.build.json",
+    "test": "node --test test/password-policy.test.cjs"
   }
 }

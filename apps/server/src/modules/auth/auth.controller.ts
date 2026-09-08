@@ -1,11 +1,12 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
-import { AuthGuard } from '../../guards/auth.guard';
+import { AuthGuard, type AuthenticatedRequest } from '../../guards/auth.guard';
 import { CurrentUser } from '../../guards/current-user.decorator';
 import { extractToken } from '../../guards/extract-token';
 import { SESSION_TTL_MS, type AuthUser, type LoginResult } from './auth.types';
 import type { LoginDto } from './dto/login.dto';
+import type { ChangePasswordDto } from './dto/change-password.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -49,5 +50,29 @@ export class AuthController {
   @UseGuards(AuthGuard)
   me(@CurrentUser() user: AuthUser): AuthUser {
     return user;
+  }
+
+  /**
+   * 用户本人修改登录密码（t14）：登录态下验证当前密码后写入新密码；
+   * 首次登录强制改密场景下，改密成功即视为登录完成（返回最新 user，mustChangePassword=false）。
+   */
+  @Post('change-password')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AuthGuard)
+  changePassword(
+    @Body() body: ChangePasswordDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: AuthenticatedRequest,
+  ): Promise<AuthUser> {
+    return this.authService.changePassword(
+      user,
+      body.currentPassword,
+      body.newPassword,
+      req.sessionToken!,
+      {
+        ip: req.ip ?? null,
+        userAgent: req.headers['user-agent'] ?? null,
+      },
+    );
   }
 }

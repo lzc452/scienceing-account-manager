@@ -1,3 +1,3 @@
 export interface CreateLeaseDto {
-  extensionVersion?: string;
+  extensionProof?: string;
 }

@@ -240,6 +240,9 @@ async function createUser(dto) {
     department: dto.department || '',
     role: dto.role || 'USER',
     enabled: true,
+    // t14：管理员设置初始密码 → 该用户首次登录须先修改密码
+    mustChangePassword: true,
+    firstLoginAt: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   }
@@ -286,6 +289,8 @@ async function resetUserPassword(id, newPassword, verifyToken) {
   const user = state.users.find((u) => u.id === Number(id))
   if (!user) throw httpError('用户不存在', 404)
   if (user.role === 'ADMIN') throw httpError('不能通过「重置用户密码」修改自己的密码', 403)
+  // t14：管理员重置为临时密码 → 该用户下次登录须先修改密码
+  user.mustChangePassword = true
   user.updatedAt = new Date().toISOString()
   return { ...user }
 }

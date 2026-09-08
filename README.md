@@ -115,6 +115,7 @@ pnpm --filter @scienceing/web dev
 | `DATABASE_PATH` | 否 | `data/scienceing.db` | SQLite 数据库路径 |
 | `PORT` | 否 | `3000` | 后端监听端口 |
 | `ADMIN_INITIAL_PASSWORD` | 否 | 无（缺失生成随机并打印） | 种子 admin 初始口令（首登须改） |
+| `SCIENCEING_EXTENSION_IDS` | 否 | 空 | 可选的 Chrome 扩展 ID 白名单（逗号分隔）；企业部署建议固定已签名扩展 ID |
 | `RECYCLE_INTERVAL_MS` | 否 | `15000` | 超时回收检查间隔（PRD §25，10~30s） |
 | `RESET_INTERVAL_MS` | 否 | `10000` | 回收队列消费间隔 |
 
@@ -147,8 +148,8 @@ pnpm --filter @scienceing/playwright-worker build   # Worker tsc 编译
 
 # 测试
 pnpm --filter @scienceing/server test               # 后端加密单测（node:test）
-pnpm --filter @scienceing/server test:e2e           # 后端 e2e（auth/leases/admin/reset，19 例）
-pnpm --filter @scienceing/extension test            # 扩展版本比较单测
+pnpm --filter @scienceing/server test:e2e           # 后端 e2e（auth/leases/admin/reset，21 例）
+pnpm --filter @scienceing/extension test            # 扩展版本比较 + 领取证明协议单测
 pnpm --filter @scienceing/playwright-worker test    # Worker 逻辑单测
 
 # 根级

@@ -230,7 +230,7 @@ async function onFormSubmit() {
         role: form.value.role,
         password: form.value.password,
       })
-      toast({ title: '已创建用户', variant: 'success' })
+      toast({ title: `已创建用户 ${form.value.username}，首次登录需修改初始密码`, variant: 'success' })
     } else {
       await updateUser(formUser.value.id, {
         displayName: form.value.displayName,
@@ -306,7 +306,7 @@ async function onResetSubmit() {
   try {
     await resetUserPassword(resetTarget.value.id, pwd, verifyToken.value)
     resetResult.value = true
-    toast({ title: `已重置 ${resetTarget.value.username} 的密码，请转告用户`, variant: 'success' })
+    toast({ title: `已重置 ${resetTarget.value.username} 的密码，请转告用户：下次登录需先修改密码`, variant: 'success' })
     load()
     // 稍作停留展示成功态后关闭（resetResult 仅用于界面反馈，不承载流程状态）
     window.setTimeout(() => {

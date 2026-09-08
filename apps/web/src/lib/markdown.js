@@ -84,7 +84,12 @@ md.renderer.rules.image = (tokens, idx) => {
   }
 
   const escapedAlt = md.utils.escapeHtml(alt)
-  return `<img src="${md.utils.escapeHtml(src)}" alt="${escapedAlt}" loading="lazy" class="md-figure" />`
+  const img = `<img src="${md.utils.escapeHtml(src)}" alt="${escapedAlt}" loading="lazy" class="md-figure" />`
+  // 有说明文字时包一层 figure + figcaption（手册插图统一「图 N：标题」题注排版）
+  if (alt.trim()) {
+    return `<figure class="md-figure-wrap">${img}<figcaption>${escapedAlt}</figcaption></figure>`
+  }
+  return img
 }
 
 /**

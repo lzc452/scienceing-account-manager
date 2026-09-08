@@ -71,11 +71,10 @@
 - **e2e 证据**：`leases.e2e.ts`「R2：同用户重复领取返回同一账号，不新增租约」（ACTIVE 租约计数 = 1）。
 - 满足 R2。
 
-### 场景 3：插件检测（插件关闭 → 无法领取）— ⛔ BLOCKED
-- **发现（实现缺口）**：后端 `POST /api/leases` 接受 `extensionVersion` 但**从不校验**（`leases.service.ts claim()` 未比对 `extension_min_version`），即 **R3/R4 未在服务端强制**。当前“禁止领取”仅靠前端 CTA 禁用，且前端 `USE_MOCK=true` 时 `pluginState.status` 恒为 `ready`。
-- **阻塞原因**：① 扩展握手（EXTENSION_PING→EXTENSION_READY，3s 超时）需在真实 Chrome/Edge 加载已解压扩展，沙箱无法加载 unpacked extension；② 服务端未实现 R3/R4 校验。
-- **复现步骤**：沙箱内无法复现；需在带浏览器的机器上 `USE_MOCK=false` + 加载 `apps/extension` 后观察握手。
-- **解除建议**：后端在 `claim()` 增加 `extensionVersion` 低于 `extension_min_version` 时 403/409（R4），并让前端在 `pluginState.status !== 'ready'` 时禁用领取。
+### 场景 3：插件检测（插件关闭 → 无法领取）— ✅ 自动化 PASS / 浏览器人工待复验
+- **修复**：看板不再直接调用领取接口；扩展以自身 Origin/ID/版本申请 30 秒一次性 `extensionProof`，后端消费证明后才允许领取。证明绑定用户、扩展 ID 与版本且不可重放，版本低于 `extension_min_version` 仍由后端拒绝。
+- **e2e 证据**：`leases.e2e.ts` 覆盖「仅伪造请求体版本拒绝」「缺证明拒绝」「低版本拒绝」「有效证明成功」「证明重放拒绝」。
+- **人工项**：真实 Chrome/Edge 加载 unpacked extension 后的握手及领取仍需在有图形浏览器的机器复验；这不再是服务端实现缺口。
 
 ### 场景 4：正常 Activity（第 29 分钟滚动 → 倒计时恢复约 30 分钟）— ✅ PASS
 - **HTTP 证据**：`POST /leases/1/activity` → `result=ACTIVE`；`GET /leases/1/status` → `remainingSeconds=1799`（≈30:00）。
@@ -118,12 +117,12 @@
 
 | # | 级别 | 问题 | 证据/位置 | 解除 |
 |---|---|---|---|---|
-| B1 | 阻塞 | **R3/R4 未在服务端强制**：`POST /api/leases` 不校验 `extensionVersion` 是否低于 `extension_min_version`，插件关闭/过旧仍可领取（场景 3 无法端到端通过） | `apps/server/src/modules/leases/leases.service.ts` `claim()` | 后端加版本门槛校验（低版本 403/409）；前端在 `pluginState.status!=='ready'` 时禁用 CTA |
+| B1 | 已解除 | **R3/R4 已在服务端强制**：领取需由扩展通道申请并消费一次性证明，低版本/缺证明/重放均拒绝 | `extension-proof.service.ts`、`leases.e2e.ts` | 企业部署可再配置 `SCIENCEING_EXTENSION_IDS` 固定已签名扩展 ID |
 | B2 | 阻塞 | **前端默认未接真实后端**：`USE_MOCK=true` 恒真；`getPool()` 在真实模式直接 `return []`（注释称“后端无池列表端点”已过期——`GET /api/accounts/pool` 实际存在） | `apps/web/src/api/index.js` L10/L171-174 | `USE_MOCK` 改为按环境配置；`getPool()` 接 `/accounts/pool` |
 | B3 | 阻塞 | **Playwright 真实改密不可在本沙箱运行**（无 Chromium，`chromium.launch` 报 spawn EPERM；运行时 `PlaywrightResetExecutor` 恒失败）→ 场景 7/8 的「改密成功→AVAILABLE」无法实跑 | `apps/server/src/modules/automation/automation.executor.ts`；t11/t12 已记录 | 在带浏览器/CI 环境将 executor 替换为真实 `ResetWorker` 调用后复验 |
 | B4 | 阻塞 | **扩展插件检测（场景 3）需人工加载 unpacked extension**，沙箱无法执行 `chrome://extensions` 加载 | `apps/extension/README.md` 已附 4 步手动验证 | 人工/带浏览器 CI 验证握手 |
 
-> 结论：后端核心状态机（领取/续期/归还/超时回收/回收队列/两阶段改密/并发）全部通过自动化与真实 HTTP 冒烟；**剩余阻塞均为「真实浏览器/Chromium/扩展加载」的环境限制与「R3/R4 服务端校验 + 前端联调」的实现缺口**，非核心租约逻辑缺陷。
+> 更新结论：R3/R4 服务端校验与前端扩展领取桥已补齐；剩余阻塞为真实浏览器/Chromium/扩展加载的环境复验，以及本表列出的其它历史事项。
 
 ---
 

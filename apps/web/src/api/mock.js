@@ -1,11 +1,16 @@
+/* global setTimeout */
+
 import { reactive } from 'vue'
+import { isPasswordAllowed, passwordPolicyMessage } from '@scienceing/shared/password-policy'
 
 /**
  * 内存 mock 后端：在未启动真实 NestJS 后端时，演示「登录 → 领取 → /my → 归还」主流程。
  * 响应形状与 packages/shared 的 DTO 保持一致（camelCase）。
  *
  * 演示口令为无关占位值（与 seed/生产任何真实凭据无关）：
- *   管理员 admin / mock-admin；普通用户 zhangsan / mock-user。
+ *   管理员 admin / mock-admin
+ *   普通用户 zhangsan / mock-user
+ *   首次登录强制改密演示 xinyuan / initial-pass-1（mustChangePassword=true，登录后强制弹改密窗）
  */
 const INACTIVITY_TIMEOUT_SECONDS = 1800 // 30 分钟
 
@@ -27,9 +32,12 @@ const state = reactive({
   lease: null,
 })
 
+// firstLoginAt/mustChangePassword 与真实后端 UserDto 同形（t14）。
+// admin/zhangsan 已登录过且无需强制改密；xinyuan 为「首次登录强制改密」演示账号。
 const MOCK_USERS = {
-  admin: { id: 1, username: 'admin', displayName: '管理员', department: 'IT', role: 'ADMIN', enabled: true, password: 'mock-admin' },
-  zhangsan: { id: 2, username: 'zhangsan', displayName: '张三', department: '研发部', role: 'USER', enabled: true, password: 'mock-user' },
+  admin: { id: 1, username: 'admin', displayName: '管理员', department: 'IT', role: 'ADMIN', enabled: true, firstLoginAt: '2026-08-01T00:00:00.000Z', password: 'mock-admin' },
+  zhangsan: { id: 2, username: 'zhangsan', displayName: '张三', department: '研发部', role: 'USER', enabled: true, firstLoginAt: '2026-08-02T00:00:00.000Z', password: 'mock-user' },
+  xinyuan: { id: 3, username: 'xinyuan', displayName: '辛媛', department: '研发部', role: 'USER', enabled: true, firstLoginAt: null, mustChangePassword: true, password: 'initial-pass-1' },
 }
 
 function isoFromNow(seconds) {
@@ -77,12 +85,15 @@ function pool() {
 }
 
 function toUserDto(user) {
-  const { password: _password, ...rest } = user
+  const rest = { ...user }
+  delete rest.password
   return rest
 }
 
 function toLeaseDto(lease) {
-  const { leaseToken: _t, password: _p, ...rest } = lease
+  const rest = { ...lease }
+  delete rest.leaseToken
+  delete rest.password
   return rest
 }
 
@@ -105,6 +116,8 @@ async function login(username, password) {
   if (!user || user.password !== password) {
     throw httpError('用户名或密码错误', 401)
   }
+  // 首次成功登录记录 first_login_at（与真实后端行为一致，t14）
+  if (!user.firstLoginAt) user.firstLoginAt = nowIso()
   state.user = toUserDto(user)
   state.token = `mock-token-${Date.now()}`
   return { token: state.token, user: state.user }
@@ -123,7 +136,24 @@ async function me() {
   return state.user
 }
 
-async function claim(extensionVersion) {
+/** 用户本人改密（t14）：校验当前密码 → 换新 → 清除强制标志，返回最新 user。 */
+async function changePassword(currentPassword, newPassword) {
+  await delay()
+  requireAuth()
+  const source = MOCK_USERS[state.user.username]
+  if (!source) throw httpError('账号不可用', 401)
+  if (source.password !== currentPassword) throw httpError('当前密码不正确', 400)
+  if (!isPasswordAllowed(newPassword)) {
+    throw httpError(passwordPolicyMessage('新密码'), 400)
+  }
+  if (newPassword === currentPassword) throw httpError('新密码不能与当前密码相同', 400)
+  source.password = newPassword
+  source.mustChangePassword = false
+  state.user = toUserDto(source)
+  return state.user
+}
+
+async function claim() {
   await delay()
   requireAuth()
 
@@ -252,6 +282,7 @@ export const mockApi = {
   login,
   logout,
   me,
+  changePassword,
   availability,
   pool,
   claim,

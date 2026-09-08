@@ -39,7 +39,7 @@ VITE_USE_MOCK=false pnpm --filter @scienceing/web dev
 - `VITE_USE_MOCK` 未设置或非 `false` → 走 mock（`src/api/mock.js` + `src/api/admin-mock.js`）。
 - `VITE_USE_MOCK=false` → 走真实 fetch（`/api/**`，dev 代理到 `http://localhost:3000`）。
 - 看板账号池列表走 `GET /api/accounts/pool`（`[{ code, status, estimatedReleaseAt }]`，游客可访问）。
-- 领取 CTA 会携带 `extensionVersion`（扩展握手返回的 version，配合后端 R3/R4 校验）。
+- 领取 CTA 通过扩展消息桥发起；扩展向后端申请并消费短时一次性 `extensionProof`，页面不再提交可伪造的版本号。
 - mock 演示口令为无关占位值（与 seed/生产凭据无关）：`admin/mock-admin`、`zhangsan/mock-user`。
 
 ## 沙箱兼容说明（重要）

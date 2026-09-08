@@ -6,6 +6,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { isPasswordAllowed, passwordPolicyMessage } from '@scienceing/shared/password-policy';
 import { DatabaseService } from '../../db/database.service';
 import { AuditService } from '../../db/audit.service';
 import { AUDIT_ACTION, AUDIT_RESULT, USER_ROLE } from '../../db/constants';
@@ -15,10 +16,6 @@ import { nowIso } from '../../db/config';
 import { toAuthUser, type AuthUser, type UserRow } from '../auth/auth.types';
 import type { CreateUserDto } from './dto/create-user.dto';
 import type { UpdateUserDto } from './dto/update-user.dto';
-
-/** 登录密码长度约束（bcrypt 有效上限 72 字节，超出部分会被静默截断，故此处显式拒绝）。 */
-const PASSWORD_MIN_LENGTH = 8;
-const PASSWORD_MAX_LENGTH = 72;
 
 @Injectable()
 export class UsersService {
@@ -42,6 +39,9 @@ export class UsersService {
     if (!username || !displayName || !password) {
       throw new BadRequestException('username / displayName / password 必填');
     }
+    if (!isPasswordAllowed(password)) {
+      throw new BadRequestException(passwordPolicyMessage());
+    }
     if (role !== USER_ROLE.USER && role !== USER_ROLE.ADMIN) {
       throw new BadRequestException('role 必须是 USER 或 ADMIN');
     }
@@ -53,10 +53,11 @@ export class UsersService {
 
     const passwordHash = await hashPassword(password);
     const now = nowIso();
+    // 初始密码由管理员代为设置（t14）：置 must_change_password=1，用户首次登录须先修改。
     const result = this.dbService.db
       .prepare(`
-        INSERT INTO users (username, display_name, department, password_hash, role, enabled, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+        INSERT INTO users (username, display_name, department, password_hash, role, enabled, must_change_password, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?)
       `)
       .run(username, displayName, department, passwordHash, role, now, now);
     const id = Number(result.lastInsertRowid);
@@ -87,6 +88,9 @@ export class UsersService {
         if (!username || !(dto.displayName ?? '').trim() || !(dto.password ?? '')) {
           throw new BadRequestException('username / displayName / password 必填');
         }
+        if (!isPasswordAllowed(dto.password)) {
+          throw new BadRequestException(passwordPolicyMessage());
+        }
         const role = dto.role ?? USER_ROLE.USER;
         if (role !== USER_ROLE.USER && role !== USER_ROLE.ADMIN) {
           throw new BadRequestException('role 必须是 USER 或 ADMIN');
@@ -102,10 +106,11 @@ export class UsersService {
 
         const passwordHash = await hashPassword(dto.password ?? '');
         const now = nowIso();
+        // 导入的初始密码同样为首登强制改（t14）
         this.dbService.db
           .prepare(`
-            INSERT INTO users (username, display_name, department, password_hash, role, enabled, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+            INSERT INTO users (username, display_name, department, password_hash, role, enabled, must_change_password, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?)
           `)
           .run(username, (dto.displayName ?? '').trim(), dto.department ?? '', passwordHash, role, now, now);
         created += 1;
@@ -220,14 +225,15 @@ export class UsersService {
     }
 
     const newPassword = dto.newPassword ?? '';
-    if (newPassword.length < PASSWORD_MIN_LENGTH || newPassword.length > PASSWORD_MAX_LENGTH) {
-      throw new BadRequestException(`新密码长度需在 ${PASSWORD_MIN_LENGTH}–${PASSWORD_MAX_LENGTH} 个字符之间`);
+    if (!isPasswordAllowed(newPassword)) {
+      throw new BadRequestException(passwordPolicyMessage('新密码'));
     }
 
     const passwordHash = await hashPassword(newPassword);
     const now = nowIso();
+    // 管理员重置的临时密码（t14）：置 must_change_password=1，用户下次登录须先修改。
     this.dbService.db
-      .prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?')
+      .prepare('UPDATE users SET password_hash = ?, must_change_password = 1, updated_at = ? WHERE id = ?')
       .run(passwordHash, now, id);
     // 使该用户所有旧会话立即失效
     this.dbService.db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);

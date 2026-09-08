@@ -1,4 +1,4 @@
-/* global chrome, fetch, console, setInterval, setTimeout, clearTimeout, AbortController */
+/* global chrome, fetch, console, setInterval, setTimeout, clearTimeout, AbortController, URL */
 
 /**
  * 科应共享账号助手 — MV3 Service Worker（核心）。
@@ -13,6 +13,7 @@
  *
  * 消息契约（content script ↔ worker）：
  *   dashboard → EXTENSION_INFO        → { version, status:'ready'|'outdated'|'error', minimumVersion, latestVersion }
+ *   dashboard → CLAIM_LEASE {authToken} → 由扩展申领一次性证明并代发领取请求
  *   dashboard → BIND_AND_OPEN {leaseId, leaseToken, accountCode?} → { ok, leaseId, tabId }
  *   scienceing → GET_TAB_LEASE        → { bound:true, leaseId, accountCode } | { bound:false }
  *   scienceing → GET_LEASE_STATUS {leaseId} → { ok, leaseId, status }
@@ -21,6 +22,7 @@
  *   worker → scienceing tab: LEASE_STATUS（含 config 阈值）/ LEASE_RELEASED / LEASE_SERVICE_ERROR（推送）
  */
 import { compareVersions } from './lib/version.js';
+import { claimLeaseThroughExtension } from './lib/claim.js';
 import {
   API_BASE,
   SCIENCEING_URL,
@@ -142,6 +144,20 @@ async function handleExtensionInfo() {
   }
   // 后端不可达：扩展仍在，但无法核对版本（PRD §45 系统不可用 → 看板应禁领取）
   return { version, status: 'error', minimumVersion: null, latestVersion: null, configError: true };
+}
+
+/**
+ * 领取由扩展 Service Worker 代发：后端可依据浏览器管理的 chrome-extension:// Origin
+ * 签发并消费一次性证明，网页不再自行提交可伪造的 extensionVersion。
+ */
+async function handleClaimLease(message) {
+  return claimLeaseThroughExtension({
+    apiBase: API_BASE,
+    authToken: message?.authToken,
+    extensionId: chrome.runtime.id,
+    extensionVersion: chrome.runtime.getManifest().version,
+    request: (url, options) => fetchWithTimeout(url, options, 5000),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -357,6 +373,8 @@ async function handleMessage(message, sender) {
   switch (message?.type) {
     case 'EXTENSION_INFO':
       return handleExtensionInfo();
+    case 'CLAIM_LEASE':
+      return handleClaimLease(message);
     case 'BIND_AND_OPEN':
       return handleBindAndOpen(message);
     case 'GET_TAB_LEASE': {
@@ -384,7 +402,7 @@ async function handleMessage(message, sender) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== 'string') return false;
-  const known = ['EXTENSION_INFO', 'BIND_AND_OPEN', 'GET_TAB_LEASE', 'GET_LEASE_STATUS', 'REPORT_ACTIVITY', 'OPEN_DASHBOARD'];
+  const known = ['EXTENSION_INFO', 'CLAIM_LEASE', 'BIND_AND_OPEN', 'GET_TAB_LEASE', 'GET_LEASE_STATUS', 'REPORT_ACTIVITY', 'OPEN_DASHBOARD'];
   if (!known.includes(message.type)) return false;
   Promise.resolve(handleMessage(message, sender)).then(sendResponse, (error) => {
     sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });

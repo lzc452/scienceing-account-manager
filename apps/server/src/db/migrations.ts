@@ -146,4 +146,36 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 5,
+    name: 'add_first_login_flag',
+    // 首次登录强制改密（t14）：
+    //   first_login_at       首次成功登录时间（NULL = 从未登录），登录时惰性写入；
+    //   must_change_password 1 = 本次登录须先修改初始/临时密码（管理员新建/重置后置 1，
+    //                          用户本人改密成功后清 0；未清除前业务接口一律被 AuthGuard 拒绝）。
+    // 存量用户默认 0：不强制既有账号补改，避免升级后全员被锁在改密弹窗前。
+    sql: `
+      ALTER TABLE users ADD COLUMN first_login_at TEXT;
+      ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
+  {
+    version: 6,
+    name: 'add_extension_claim_proofs',
+    // 扩展领取证明：由 chrome-extension:// Origin 申领，30 秒内一次性消费；
+    // 防止看板或普通网页仅伪造 extensionVersion 就绕过扩展门槛。
+    sql: `
+      CREATE TABLE extension_claim_proofs (
+        token_hash TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        extension_id TEXT NOT NULL,
+        extension_version TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        consumed_at TEXT
+      );
+
+      CREATE INDEX idx_extension_claim_proofs_expiry ON extension_claim_proofs(expires_at);
+    `,
+  },
 ];

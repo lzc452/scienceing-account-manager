@@ -447,6 +447,23 @@
   margin: 0.8em 0;
 }
 
+/* 插图统一「图 + 题注」排版（markdown.js 对带 alt 的图输出 figure.md-figure-wrap） */
+.md-body figure.md-figure-wrap {
+  margin: 1.1em 0;
+  text-align: center;
+}
+
+.md-body figure.md-figure-wrap img.md-figure {
+  margin: 0;
+}
+
+.md-body figure.md-figure-wrap figcaption {
+  margin-top: 0.5em;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-mid-gray);
+}
+
 /* —— 图片占位提示框（正文写 ![说明](placeholder) 时由渲染规则产出） —— */
 .md-figure-placeholder {
   display: flex;

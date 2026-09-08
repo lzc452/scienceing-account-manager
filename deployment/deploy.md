@@ -35,6 +35,8 @@ export SCIENCEING_MASTER_KEY="<64位hex，勿入库>"        # 必填，且必�
 export DATABASE_PATH="/var/lib/scienceing/scienceing.db"  # 可选
 export PORT=3000
 export ADMIN_INITIAL_PASSWORD="<强密码>"
+# 企业签名/策略部署时建议固定扩展 ID；多个 ID 用逗号分隔
+export SCIENCEING_EXTENSION_IDS="<32位 Chrome 扩展 ID>"
 
 # 3. 构建
 pnpm --filter @scienceing/server build
@@ -60,6 +62,7 @@ pnpm --filter @scienceing/web preview -- --host
 | `SCIENCEING_MASTER_KEY` | AES-256-GCM Master Key（hex 64 字符）。**必须持久保存且与 seed 时一致**，否则重启后无法解密已存科应密码。 |
 | `SCIENCING_ADMIN_USERNAME` / `SCIENCING_ADMIN_PASSWORD` / `SCIENCING_ADMIN_URL` | Playwright 改密的科应管理员凭据（仅环境变量，PRD §42，绝不可写库/代码/Git）。 |
 | `DATABASE_PATH` | 数据库路径；建议放独立数据盘并纳入备份。 |
+| `SCIENCEING_EXTENSION_IDS` | 可选扩展 ID 白名单（逗号分隔）。企业部署建议配置，配合一次性领取证明限制允许的扩展来源。 |
 
 ## 5. 反向代理（Nginx 示例）
 

@@ -2,16 +2,22 @@
 # Precondition: server running on PORT=3100 with DATABASE_PATH=data/acceptance.db, RESET_INTERVAL_MS=1500
 $ErrorActionPreference = 'Stop'
 $base = 'http://localhost:3100/api'
+$extensionId = 'abcdefghijklmnopabcdefghijklmnop'
+$extensionVersion = '1.3.0'
 
 function Invoke-Json {
   param(
     [ValidateSet('GET', 'POST', 'PATCH')] [string]$Method,
     [string]$Path,
     [object]$Body = $null,
-    [string]$Token = ''
+    [string]$Token = '',
+    [hashtable]$ExtraHeaders = $null
   )
   $headers = @{}
   if ($Token) { $headers['Authorization'] = "Bearer $Token" }
+  if ($ExtraHeaders) {
+    foreach ($key in $ExtraHeaders.Keys) { $headers[$key] = $ExtraHeaders[$key] }
+  }
   $uri = "$base$Path"
   try {
     if ($Method -eq 'GET') {
@@ -38,6 +44,18 @@ function Invoke-Json {
   }
 }
 
+function Invoke-ExtensionClaim {
+  param([string]$Token)
+  $headers = @{
+    Origin = "chrome-extension://$extensionId"
+    'X-Scienceing-Extension-Id' = $extensionId
+    'X-Scienceing-Extension-Version' = $extensionVersion
+  }
+  $proof = Invoke-Json POST '/extension/claim-proof' @{} $Token $headers
+  if ($proof.status -ne 201 -or -not $proof.body.proof) { return $proof }
+  return Invoke-Json POST '/leases' @{ extensionProof = $proof.body.proof } $Token $headers
+}
+
 function Show([string]$label, $obj) {
   Write-Output "===== $label ====="
   $obj | ConvertTo-Json -Depth 8
@@ -51,21 +69,28 @@ Show 'initial availability' (Invoke-Json GET '/accounts/availability')
 $admin = Invoke-Json POST '/auth/login' @{ username = 'admin'; password = 'admin123456' }
 Show 'admin login' @{ status = $admin.status; user = $admin.body.user.username }
 $adminToken = $admin.body.token
+if ($admin.body.user.mustChangePassword) {
+  $changed = Invoke-Json POST '/auth/change-password' @{
+    currentPassword = 'admin123456'
+    newPassword = 'admin-smoke-pass-1'
+  } $adminToken
+  Show 'admin first-login password change' @{ status = $changed.status; mustChangePassword = $changed.body.mustChangePassword }
+}
 
-$c1 = Invoke-Json POST '/admin/users' @{ username = 'u1'; displayName = 'UserOne'; department = 'R&D'; password = 'u1-pass'; role = 'USER' } $adminToken
-$c2 = Invoke-Json POST '/admin/users' @{ username = 'u2'; displayName = 'UserTwo'; department = 'PM'; password = 'u2-pass'; role = 'USER' } $adminToken
+$c1 = Invoke-Json POST '/admin/users' @{ username = 'u1'; displayName = 'UserOne'; department = 'R&D'; password = 'u1-pass-1'; role = 'USER' } $adminToken
+$c2 = Invoke-Json POST '/admin/users' @{ username = 'u2'; displayName = 'UserTwo'; department = 'PM'; password = 'u2-pass-1'; role = 'USER' } $adminToken
 Show 'create users' @{ u1 = $c1.status; u2 = $c2.status }
 
 # 3. u1 / u2 login
-$u1 = Invoke-Json POST '/auth/login' @{ username = 'u1'; password = 'u1-pass' }
-$u2 = Invoke-Json POST '/auth/login' @{ username = 'u2'; password = 'u2-pass' }
+$u1 = Invoke-Json POST '/auth/login' @{ username = 'u1'; password = 'u1-pass-1' }
+$u2 = Invoke-Json POST '/auth/login' @{ username = 'u2'; password = 'u2-pass-1' }
 $u1Token = $u1.body.token
 $u2Token = $u2.body.token
 Show 'u1/u2 login' @{ u1 = $u1.status; u2 = $u2.status }
 
 # ---- Scenario 1: normal claim (A claims KY-01, B cannot claim same) ----
-$claimA = Invoke-Json POST '/leases' @{ extensionVersion = '1.0.0' } $u1Token
-$claimB = Invoke-Json POST '/leases' @{ extensionVersion = '1.0.0' } $u2Token
+$claimA = Invoke-ExtensionClaim $u1Token
+$claimB = Invoke-ExtensionClaim $u2Token
 $codeA = $claimA.body.account.code
 $codeB = $claimB.body.account.code
 Show 'S1 claim A then B' @{
@@ -75,7 +100,7 @@ Show 'S1 claim A then B' @{
 }
 
 # ---- Scenario 2: one user one lease (re-claim returns same account) ----
-$claimA2 = Invoke-Json POST '/leases' @{ extensionVersion = '1.0.0' } $u1Token
+$claimA2 = Invoke-ExtensionClaim $u1Token
 Show 'S2 A re-claim returns same' @{
   status = $claimA2.status
   firstCode = $codeA
@@ -121,10 +146,10 @@ Show 'S9 reset failure -> ERROR' @{
 }
 
 # ---- Post-ERROR check: ERROR account is not claimable (new user gets a different account) ----
-$c3 = Invoke-Json POST '/admin/users' @{ username = 'u3'; displayName = 'UserThree'; department = 'QA'; password = 'u3-pass'; role = 'USER' } $adminToken
-$u3 = Invoke-Json POST '/auth/login' @{ username = 'u3'; password = 'u3-pass' }
+$c3 = Invoke-Json POST '/admin/users' @{ username = 'u3'; displayName = 'UserThree'; department = 'QA'; password = 'u3-pass-1'; role = 'USER' } $adminToken
+$u3 = Invoke-Json POST '/auth/login' @{ username = 'u3'; password = 'u3-pass-1' }
 $u3Token = $u3.body.token
-$claimU3 = Invoke-Json POST '/leases' @{ extensionVersion = '1.0.0' } $u3Token
+$claimU3 = Invoke-ExtensionClaim $u3Token
 Show 'post-ERROR new user claims different' @{
   u3Status = $claimU3.status
   u3Code = $claimU3.body.account.code

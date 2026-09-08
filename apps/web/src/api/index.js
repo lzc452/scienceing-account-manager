@@ -1,3 +1,5 @@
+/* global window, document, localStorage, fetch */
+
 import { computed, reactive } from 'vue'
 import { mockApi } from './mock'
 
@@ -214,6 +216,21 @@ export async function logout() {
   persist()
 }
 
+/**
+ * 用户本人修改登录密码（t14）：
+ * POST /auth/change-password { currentPassword, newPassword }
+ * 返回最新 user（首次登录强制改密场景下 mustChangePassword 已为 false）。
+ * 成功即更新本地登录态，无需重新登录。
+ */
+export async function changePassword(currentPassword, newPassword) {
+  const data = USE_MOCK
+    ? await mockApi.changePassword(currentPassword, newPassword)
+    : await http('POST', '/auth/change-password', { currentPassword, newPassword })
+  authState.user = data
+  persist()
+  return data
+}
+
 export async function fetchMe() {
   if (USE_MOCK) {
     return mockApi.me()
@@ -233,8 +250,39 @@ export function getPool() {
   return USE_MOCK ? Promise.resolve(mockApi.pool()) : http('GET', '/accounts/pool')
 }
 
-export function claimLease(extensionVersion) {
-  return USE_MOCK ? mockApi.claim(extensionVersion) : http('POST', '/leases', { extensionVersion })
+export function claimLease() {
+  if (USE_MOCK) return mockApi.claim()
+  if (!authState.token) return Promise.reject(new ApiError('未登录', 401))
+
+  return new Promise((resolve, reject) => {
+    const requestId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`
+    const timer = window.setTimeout(() => finish(new ApiError('科应账号助手响应超时，请刷新页面后重试', 0)), 12_000)
+
+    function finish(error, data) {
+      window.clearTimeout(timer)
+      window.removeEventListener('message', onMessage)
+      if (error) reject(error)
+      else resolve(data)
+    }
+
+    function onMessage(event) {
+      const data = event.data
+      if (
+        event.source !== window ||
+        data?.source !== 'scienceing-extension' ||
+        data?.type !== 'CLAIM_LEASE_RESULT' ||
+        data?.requestId !== requestId
+      ) return
+      if (data.ok) finish(null, data.data)
+      else finish(new ApiError(data.error || '领取账号失败', Number(data.status || 0)))
+    }
+
+    window.addEventListener('message', onMessage)
+    window.postMessage(
+      { source: 'scienceing-dashboard', type: 'CLAIM_LEASE', requestId, authToken: authState.token },
+      window.location.origin,
+    )
+  })
 }
 
 export function getCurrentLease() {

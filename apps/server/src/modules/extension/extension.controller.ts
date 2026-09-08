@@ -1,7 +1,12 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
+import type { Request } from 'express';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseService } from '../../db/database.service';
+import { AuthGuard } from '../../guards/auth.guard';
+import { CurrentUser } from '../../guards/current-user.decorator';
+import type { AuthUser } from '../auth/auth.types';
+import { ExtensionProofService } from './extension-proof.service';
 
 /** 部署时由 deploy-lan 产出的扩展包元信息（apps/web/dist/downloads/extension.json）。 */
 interface ExtensionPackageMeta {
@@ -50,7 +55,10 @@ function readPackage(): ExtensionPackageMeta {
 
 @Controller('extension')
 export class ExtensionController {
-  constructor(private readonly dbService: DatabaseService) {}
+  constructor(
+    private readonly dbService: DatabaseService,
+    private readonly extensionProofs: ExtensionProofService,
+  ) {}
 
   /** 插件配置（PRD §11 / §40），游客可访问。 */
   @Get('config')
@@ -69,6 +77,14 @@ export class ExtensionController {
       // 下载包信息：前端「下载助手 / 下载最新版 ZIP」据此给出真实入口
       package: readPackage(),
     };
+  }
+
+  /** 扩展 Service Worker 申领短时一次性领取证明；普通网页 Origin 会被拒绝。 */
+  @Post('claim-proof')
+  @UseGuards(AuthGuard)
+  issueClaimProof(@CurrentUser() user: AuthUser, @Req() req: Request) {
+    const identity = this.extensionProofs.requireIdentity(req.headers);
+    return this.extensionProofs.issue(user.id, identity);
   }
 
   /** 读取数值型系统设置：仅采用 >0 的有效数字，否则回退 fallback（与 leases/accounts 的超时判定语义一致）。 */

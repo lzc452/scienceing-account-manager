@@ -20,6 +20,8 @@ const router = createRouter({
     { path: '/', name: 'home', component: HomePage },
     { path: '/login', name: 'login', component: LoginPage },
     { path: '/my', name: 'my', component: MyAccountPage, meta: { requiresAuth: true } },
+    // 首次登录强制改密（t14）：锁定页，未修改初始密码前不可进入任何其它页面
+    { path: '/force-password', name: 'force-password', component: () => import('@/pages/ForcePasswordPage.vue') },
     { path: '/design', name: 'design', component: ComponentShowcase },
     // 使用手册：游客可读（只读渲染），管理员可在页内编辑。
     // 懒加载：markdown-it/DOMPurify 只在进入手册页时加载。
@@ -42,6 +44,17 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
+  // 首次登录强制改密（t14）：mustChangePassword 用户只能停留在 /force-password，
+  // 其它任何页面（含登录页）一律重定向回改密页 —— 弹窗无法通过页面交互关闭。
+  const forced = authState.token && authState.user?.mustChangePassword
+  if (forced && to.name !== 'force-password') {
+    return { name: 'force-password' }
+  }
+  if (to.name === 'force-password') {
+    if (!authState.token) return { name: 'login' }
+    if (!authState.user?.mustChangePassword) return { name: 'home' }
+    return true
+  }
   if (to.meta.requiresAuth && !authState.token) {
     return { name: 'login', query: { redirect: to.fullPath } }
   }

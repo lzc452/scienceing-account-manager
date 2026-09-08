@@ -30,7 +30,12 @@ async function onSubmit() {
   }
   submitting.value = true
   try {
-    await login(username.value.trim(), password.value)
+    const data = await login(username.value.trim(), password.value)
+    // 首次登录（t14）：初始密码登录后必须先进强制改密页，改密成功才进入业务首页
+    if (data?.user?.mustChangePassword) {
+      router.replace('/force-password')
+      return
+    }
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
     router.replace(redirect)
   } catch (e) {

@@ -7,15 +7,21 @@ import { extractBearerToken } from '../../guards/extract-token';
 import { RELEASE_REASON } from '../../db/constants';
 import type { AuthUser } from '../auth/auth.types';
 import type { CreateLeaseDto } from './dto/create-lease.dto';
+import { ExtensionProofService } from '../extension/extension-proof.service';
 
 @Controller('leases')
 export class LeasesController {
-  constructor(private readonly leasesService: LeasesService) {}
+  constructor(
+    private readonly leasesService: LeasesService,
+    private readonly extensionProofs: ExtensionProofService,
+  ) {}
 
   @Post()
   @UseGuards(AuthGuard)
-  create(@Body() dto: CreateLeaseDto, @CurrentUser() user: AuthUser) {
-    return this.leasesService.claim(user.id, dto.extensionVersion);
+  create(@Body() dto: CreateLeaseDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    const identity = this.extensionProofs.requireIdentity(req.headers);
+    const extensionVersion = this.extensionProofs.consume(user.id, dto.extensionProof, identity);
+    return this.leasesService.claim(user.id, extensionVersion);
   }
 
   @Get('current')

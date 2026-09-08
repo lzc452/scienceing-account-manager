@@ -132,7 +132,7 @@ async function onCta() {
   }
   claiming.value = true
   try {
-    const res = await claimLease(pluginState.version)
+    const res = await claimLease()
     // 暂存 leaseToken（后端只存其哈希、无法从 current 还原），供「打开科应」BIND_AND_OPEN 使用
     if (res?.leaseToken) sessionStorage.setItem('scienceing_lease_token', res.leaseToken)
     toast({ title: `已领取 ${res.account.code}`, description: '正在跳转到我的账号…', variant: 'success' })

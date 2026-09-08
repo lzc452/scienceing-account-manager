@@ -703,8 +703,9 @@ async function cmdResetAdmin(argv) {
         const row = db.prepare("SELECT id FROM users WHERE username = 'admin'").get();
         if (!row) { console.log('admin 不存在，请先执行部署初始化数据库'); process.exit(1); }
         const hash = await hashPassword(${JSON.stringify(pwd)});
-        db.prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE username = 'admin'").run(hash, new Date().toISOString());
-        console.log('admin 口令已重置（ADMIN_INITIAL_PASSWORD）');
+        // t14：重置口令属临时密码，置 must_change_password=1 → 管理员下次登录须先修改密码
+        db.prepare("UPDATE users SET password_hash = ?, must_change_password = 1, updated_at = ? WHERE username = 'admin'").run(hash, new Date().toISOString());
+        console.log('admin 口令已重置（ADMIN_INITIAL_PASSWORD），下次登录需先修改密码');
       } finally { db.close(); }
     })().catch((e) => { console.error(e.message); process.exit(1); });`;
   const r = spawnSync(rt.nodeBin, ['-e', script], { encoding: 'utf8', timeout: 30_000, cwd: APP_SERVER, windowsHide: true });

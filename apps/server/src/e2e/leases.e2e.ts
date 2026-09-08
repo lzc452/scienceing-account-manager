@@ -10,6 +10,13 @@ import { DatabaseService } from '../db/database.service';
 import { seedDatabase } from '../db/seed';
 import { hashPassword } from '../crypto/password';
 import { LeasesService } from '../modules/leases/leases.service';
+import {
+  claimAsExtension,
+  extensionHeaders,
+  issueExtensionProof,
+  provisionSeedAccounts,
+  TEST_ACCOUNT_PASSWORD,
+} from './extension-fixture';
 
 const MASTER_KEY_HEX = '06bd85dc11dd5998a014a042afb70e714c41f6d46a94b1b119cfd26bff999e54';
 const ADMIN_PASSWORD = 'admin123456';
@@ -37,7 +44,9 @@ before(async () => {
   app.setGlobalPrefix('api');
   await app.init();
   db = app.get(DatabaseService).db;
-  await seedDatabase(db, { adminPassword: ADMIN_PASSWORD, masterKey: Buffer.from(MASTER_KEY_HEX, 'hex') });
+  const masterKey = Buffer.from(MASTER_KEY_HEX, 'hex');
+  await seedDatabase(db, { adminPassword: ADMIN_PASSWORD, masterKey });
+  provisionSeedAccounts(db, masterKey);
 
   const now = nowIso();
   db.prepare(
@@ -68,9 +77,19 @@ test('游客可访问 availability 统计（不泄露密码/使用人）', async
   assert.equal(res.body.currentUser, undefined);
 });
 
+test('仅在请求体伪造扩展版本不能领取账号', async () => {
+  resetPool();
+  const forged = await request(app.getHttpServer())
+    .post('/api/leases')
+    .set('Authorization', `Bearer ${u1Token}`)
+    .send({ extensionVersion: '999.0.0' });
+  assert.equal(forged.status, 409);
+  assert.equal(forged.body.code, 'EXTENSION_REQUIRED');
+});
+
 test('游客可访问账号池列表（匿名，不含密码/密文，IN_USE 有 estimatedReleaseAt）', async () => {
   resetPool();
-  const claim = await request(app.getHttpServer()).post('/api/leases').set('Authorization', `Bearer ${u1Token}`).send({ extensionVersion: '1.0.0' });
+  const claim = await claimAsExtension(app, u1Token);
   const claimedCode = claim.body.lease.accountCode as string;
 
   const res = await request(app.getHttpServer()).get('/api/accounts/pool');
@@ -97,28 +116,45 @@ test('游客可访问账号池列表（匿名，不含密码/密文，IN_USE 有
   }
 });
 
-test('R3/R4：插件未装 / 版本过旧拒绝领取（>= 最低版本可领）', async () => {
+test('R3/R4：扩展证明缺失 / 版本过旧拒绝领取（>= 最低版本可领且证明不可重放）', async () => {
   resetPool();
-  // 无 extensionVersion → EXTENSION_REQUIRED（409）
+  // 普通网页请求既没有扩展 Origin，也没有领取证明 → EXTENSION_REQUIRED（409）
   const missing = await request(app.getHttpServer()).post('/api/leases').set('Authorization', `Bearer ${u1Token}`).send({});
   assert.equal(missing.status, 409);
   assert.equal(missing.body.code, 'EXTENSION_REQUIRED');
 
-  // 低版本 → EXTENSION_OUTDATED（409）
-  const outdated = await request(app.getHttpServer())
-    .post('/api/leases')
+  // Origin 必须是纯 chrome-extension://<id>，不能夹带路径伪装扩展来源。
+  const malformedOrigin = await request(app.getHttpServer())
+    .post('/api/extension/claim-proof')
     .set('Authorization', `Bearer ${u1Token}`)
-    .send({ extensionVersion: '0.9.0' });
+    .set(extensionHeaders())
+    .set('Origin', `${extensionHeaders().Origin}/forged`)
+    .send({});
+  assert.equal(malformedOrigin.status, 409);
+  assert.equal(malformedOrigin.body.code, 'EXTENSION_REQUIRED');
+
+  // 真实扩展通道签发证明，但版本过旧 → EXTENSION_OUTDATED（409）
+  const outdated = await claimAsExtension(app, u1Token, '0.9.0');
   assert.equal(outdated.status, 409);
   assert.equal(outdated.body.code, 'EXTENSION_OUTDATED');
 
-  // >= 最低版本（1.0.0）可领
+  // >= 最低版本（1.0.0）可领；相同证明第二次使用必须失败
+  const proof = await issueExtensionProof(app, u1Token);
   const ok = await request(app.getHttpServer())
     .post('/api/leases')
     .set('Authorization', `Bearer ${u1Token}`)
-    .send({ extensionVersion: '1.0.0' });
+    .set(extensionHeaders())
+    .send({ extensionProof: proof });
   assert.equal(ok.status, 201);
   assert.ok(ok.body.leaseToken);
+
+  const replay = await request(app.getHttpServer())
+    .post('/api/leases')
+    .set('Authorization', `Bearer ${u1Token}`)
+    .set(extensionHeaders())
+    .send({ extensionProof: proof });
+  assert.equal(replay.status, 409);
+  assert.equal(replay.body.code, 'EXTENSION_PROOF_INVALID');
 });
 
 test('并发领取：两用户抢最后一个账号，仅一人成功（事务保证）', async () => {
@@ -126,8 +162,8 @@ test('并发领取：两用户抢最后一个账号，仅一人成功（事务�
   db.exec("UPDATE scienceing_accounts SET status = 'IN_USE' WHERE code != 'KY-01'");
 
   const [res1, res2] = await Promise.all([
-    request(app.getHttpServer()).post('/api/leases').set('Authorization', `Bearer ${u1Token}`).send({ extensionVersion: '1.0.0' }),
-    request(app.getHttpServer()).post('/api/leases').set('Authorization', `Bearer ${u2Token}`).send({ extensionVersion: '1.0.0' }),
+    claimAsExtension(app, u1Token),
+    claimAsExtension(app, u2Token),
   ]);
 
   const ok = [res1, res2].filter((r) => r.status === 201);
@@ -137,7 +173,7 @@ test('并发领取：两用户抢最后一个账号，仅一人成功（事务�
   const winner = ok[0];
   assert.ok(winner);
   assert.equal(winner.body.account.code, 'KY-01');
-  assert.equal(winner.body.account.password, '__PLACEHOLDER__');
+  assert.equal(winner.body.account.password, TEST_ACCOUNT_PASSWORD);
 
   const active = db
     .prepare(
@@ -149,11 +185,11 @@ test('并发领取：两用户抢最后一个账号，仅一人成功（事务�
 
 test('R2：同用户重复领取返回同一账号，不新增租约', async () => {
   resetPool();
-  const first = await request(app.getHttpServer()).post('/api/leases').set('Authorization', `Bearer ${u1Token}`).send({ extensionVersion: '1.0.0' });
+  const first = await claimAsExtension(app, u1Token);
   assert.equal(first.status, 201);
   const firstCode = first.body.lease.accountCode as string;
 
-  const again = await request(app.getHttpServer()).post('/api/leases').set('Authorization', `Bearer ${u1Token}`).send({ extensionVersion: '1.0.0' });
+  const again = await claimAsExtension(app, u1Token);
   assert.equal(again.status, 201);
   assert.equal(again.body.lease.accountCode, firstCode);
 
@@ -163,7 +199,7 @@ test('R2：同用户重复领取返回同一账号，不新增租约', async () 
 
 test('Activity 续期/过期状态机 + 归还创建 reset_job', async () => {
   resetPool();
-  const claim = await request(app.getHttpServer()).post('/api/leases').set('Authorization', `Bearer ${u1Token}`).send({ extensionVersion: '1.0.0' });
+  const claim = await claimAsExtension(app, u1Token);
   assert.equal(claim.status, 201);
   const leaseId = claim.body.lease.id as number;
   const leaseToken = claim.body.leaseToken as string;
@@ -203,7 +239,7 @@ test('Activity 续期/过期状态机 + 归还创建 reset_job', async () => {
 
 test('竞态：29:59 刚操作不被 30:00 回收误踢（条件更新 R6）', async () => {
   resetPool();
-  const claim = await request(app.getHttpServer()).post('/api/leases').set('Authorization', `Bearer ${u1Token}`).send({ extensionVersion: '1.0.0' });
+  const claim = await claimAsExtension(app, u1Token);
   const leaseId = claim.body.lease.id as number;
   const leaseToken = claim.body.leaseToken as string;
 

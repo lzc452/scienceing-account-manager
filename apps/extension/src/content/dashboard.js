@@ -5,8 +5,10 @@
  *
  * 与看板页面通过受控 window.postMessage 通信（PRD §10）：
  *   看板 → 扩展：{ source:'scienceing-dashboard', type:'EXTENSION_PING' }
+ *   看板 → 扩展：{ source:'scienceing-dashboard', type:'CLAIM_LEASE', requestId, authToken }
  *   看板 → 扩展：{ source:'scienceing-dashboard', type:'BIND_AND_OPEN', leaseId, leaseToken, accountCode? }
  *   扩展 → 看板：{ source:'scienceing-extension', type:'EXTENSION_READY', version, status, minimumVersion, latestVersion }
+ *   扩展 → 看板：{ source:'scienceing-extension', type:'CLAIM_LEASE_RESULT', requestId, ok, data?, error? }
  *   扩展 → 看板：{ source:'scienceing-extension', type:'BIND_ACK', ok, leaseId?, tabId?, error? }
  *
  * 额外提供 document 自定义事件 `scienceing:extension-ready`（detail 同 EXTENSION_READY），
@@ -51,6 +53,9 @@
     if (data.type === 'EXTENSION_PING') {
       const info = await queryInfo();
       post({ type: 'EXTENSION_READY', ...info });
+    } else if (data.type === 'CLAIM_LEASE') {
+      const result = await chrome.runtime.sendMessage({ type: 'CLAIM_LEASE', authToken: data.authToken });
+      post({ type: 'CLAIM_LEASE_RESULT', requestId: data.requestId, ...result });
     } else if (data.type === 'BIND_AND_OPEN') {
       try {
         const result = await chrome.runtime.sendMessage({

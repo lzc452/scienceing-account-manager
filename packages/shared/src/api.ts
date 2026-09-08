@@ -77,8 +77,8 @@ export interface AccountAvailabilityDto {
 // ---------------------------------------------------------------------------
 
 export interface CreateLeaseRequest {
-  /** 领取时浏览器插件的版本号（用于审计与 R4 版本校验） */
-  extensionVersion?: string;
+  /** 由可信扩展通道签发的短时一次性领取证明 */
+  extensionProof: string;
 }
 
 /** 科应账号凭据（仅领取成功响应中返回，R10） */

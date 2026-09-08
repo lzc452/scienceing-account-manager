@@ -47,7 +47,7 @@ for (const permission of manifest.permissions ?? []) {
 const referencedFiles = [];
 if (manifest.background?.service_worker) referencedFiles.push(manifest.background.service_worker);
 for (const cs of manifest.content_scripts ?? []) referencedFiles.push(...(cs.js ?? []));
-referencedFiles.push('src/lib/version.js', 'src/lib/config.js');
+referencedFiles.push('src/lib/version.js', 'src/lib/config.js', 'src/lib/claim.js');
 
 for (const file of referencedFiles) {
   try {

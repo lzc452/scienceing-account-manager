@@ -8,8 +8,9 @@
 apps/extension/
 ├── manifest.json                 MV3 清单（最小权限：tabs + storage；只注入看板域 + 科应域）
 ├── src/
-│   ├── background.js             module SW：握手/版本检测 / BIND_AND_OPEN / Tab 继承 / 状态轮询 / Activity 节流上报 / 悬浮窗跳转
+│   ├── background.js             module SW：握手/领取证明 / BIND_AND_OPEN / Tab 继承 / 状态轮询 / Activity 节流上报 / 悬浮窗跳转
 │   ├── lib/
+│   │   ├── claim.js              一次性领取证明 + 领取请求（纯函数，可单测）
 │   │   ├── config.js             域名/后端地址等环境常量（部署时替换）
 │   │   └── version.js            纯函数版本比较（node:test 覆盖）
 │   ├── content/
@@ -19,7 +20,7 @@ apps/extension/
 │   └── panel/
 │       └── panel.js              Shadow DOM 悬浮窗五态（#__scienceing_account_assistant__）
 ├── scripts/validate.mjs          「构建」= 结构校验 + 最小权限审计（无打包，unpacked 直载）
-└── test/version.test.mjs         node:test 单测
+└── test/                         version + claim 协议 node:test 单测
 ```
 
 ## 安装（手动加载已解压扩展，PRD §53）
@@ -72,12 +73,15 @@ window.addEventListener('message', (e) => {
 | 方向 | 消息 | 载荷 → 返回 |
 |---|---|---|
 | dashboard → worker | `EXTENSION_INFO` | → `{ version, status, minimumVersion, latestVersion }` |
+| dashboard → worker | `CLAIM_LEASE` | `{ authToken }` → 扩展先申请一次性证明，再领取账号；返回 `{ ok, data?, error? }` |
 | dashboard → worker | `BIND_AND_OPEN` | `{ leaseId, leaseToken, accountCode? }` → `{ ok, leaseId, tabId }` |
 | scienceing → worker | `GET_TAB_LEASE` | → `{ bound, leaseId?, accountCode? }` |
 | scienceing → worker | `GET_LEASE_STATUS` | `{ leaseId }` → `{ ok, leaseId, status }` |
 | scienceing → worker | `REPORT_ACTIVITY` | `{ leaseId }` → `{ ok, reported }`（worker 5~10s 节流合并后 POST） |
 | scienceing → worker | `OPEN_DASHBOARD` | `{ path }` → `{ ok, tabId }`（立即归还确认 / 返回看板跳转） |
 | worker → scienceing tab | `LEASE_STATUS`（含 config 阈值）/ `LEASE_RELEASED` / `LEASE_SERVICE_ERROR` | 状态推送（驱动悬浮窗） |
+
+领取时，worker 以 `chrome-extension://<runtime.id>` Origin 调用 `POST /api/extension/claim-proof`，再把短时一次性 `extensionProof` 提交给 `POST /api/leases`。证明绑定当前用户、扩展 ID 与版本且消费后失效；普通看板页面仅伪造请求体版本号无法领取。企业部署建议同时设置后端 `SCIENCEING_EXTENSION_IDS` 白名单。
 
 ## Activity 与悬浮窗（t10，PRD §17/§18/§20/§21/§22/§44）
 

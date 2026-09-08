@@ -9,9 +9,11 @@ import { AppModule } from '../app.module';
 import { DatabaseService } from '../db/database.service';
 import { seedDatabase } from '../db/seed';
 import { hashPassword } from '../crypto/password';
+import { claimAsExtension, completeSeedAdminFirstLogin, provisionSeedAccounts } from './extension-fixture';
 
 const MASTER_KEY_HEX = '06bd85dc11dd5998a014a042afb70e714c41f6d46a94b1b119cfd26bff999e54';
-const ADMIN_PASSWORD = 'admin123456';
+const ADMIN_INITIAL_PASSWORD = 'admin123456';
+const ADMIN_PASSWORD = 'admin-changed-123';
 
 let app: INestApplication;
 let db: DatabaseSync;
@@ -25,18 +27,17 @@ before(async () => {
   app.setGlobalPrefix('api');
   await app.init();
   db = app.get(DatabaseService).db;
-  await seedDatabase(db, { adminPassword: ADMIN_PASSWORD, masterKey: Buffer.from(MASTER_KEY_HEX, 'hex') });
+  const masterKey = Buffer.from(MASTER_KEY_HEX, 'hex');
+  await seedDatabase(db, { adminPassword: ADMIN_INITIAL_PASSWORD, masterKey });
+  provisionSeedAccounts(db, masterKey);
 
   const now = new Date().toISOString();
   db.prepare(
     'INSERT INTO users (username, display_name, department, password_hash, role, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)',
   ).run('u1', '普通用户', '研发部', await hashPassword('u1-pass'), 'USER', now, now);
 
-  const adminLogin = await request(app.getHttpServer())
-    .post('/api/auth/login')
-    .send({ username: 'admin', password: ADMIN_PASSWORD });
+  adminToken = await completeSeedAdminFirstLogin(app, ADMIN_INITIAL_PASSWORD, ADMIN_PASSWORD);
   const userLogin = await request(app.getHttpServer()).post('/api/auth/login').send({ username: 'u1', password: 'u1-pass' });
-  adminToken = adminLogin.body.token as string;
   userToken = userLogin.body.token as string;
 });
 
@@ -60,7 +61,7 @@ test('GET /admin/accounts 列表（10 账号）', async () => {
 
 test('force-release / reset-password / mark-available / disable 集成', async () => {
   // u1 领取 → KY-01
-  const claim = await request(app.getHttpServer()).post('/api/leases').set('Authorization', `Bearer ${userToken}`).send({ extensionVersion: '1.0.0' });
+  const claim = await claimAsExtension(app, userToken);
   assert.equal(claim.status, 201);
   const accountId = claim.body.lease.accountId as number;
 

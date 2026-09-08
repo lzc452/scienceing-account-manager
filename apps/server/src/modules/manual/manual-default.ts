@@ -4,8 +4,9 @@
  * 首次启动由 seed.ts 以 INSERT OR IGNORE 写入 manuals 表；此后由管理员在
  * 「使用手册」页编辑，内容以数据库为准，代码里的这份只在缺行时作为兜底。
  *
- * 图片约定：正文里用 `![图片说明](placeholder)` 声明占位图，前端渲染为
- * 「待补充图片」提示框并展示说明文字，管理员按说明补图即可，不影响排版。
+ * 图片约定：插图统一放在 apps/web/public/manual/（按「图号-内容」命名），
+ * 正文用 `![图 N：标题](/manual/xx.png)` 引用；前端渲染为 figure + figcaption 题注。
+ * 管理员也可在编辑器里用「上传图片」把本地图压缩成 data URL 内联进正文。
  */
 
 export const MANUAL_DEFAULT_SLUG = 'user-guide';
@@ -37,7 +38,7 @@ export const MANUAL_DEFAULT_CONTENT = `# 科应共享账号管理平台 · 使�
 
 一句话概括流程：**登录看板 → 领取账号 → 打开科应（自动登录）→ 用完归还。**
 
-![平台流程示意：看板 → 领取 → 科应 → 归还 四步闭环](placeholder)
+![图 1：平台使用闭环流程](/manual/01-platform-flow.png)
 
 ### 1.1 三个角色
 
@@ -62,7 +63,7 @@ export const MANUAL_DEFAULT_CONTENT = `# 科应共享账号管理平台 · 使�
 
 在浏览器打开管理员分发的内网看板地址（形如 \`http://10.x.x.x:18080/\`），输入账号密码登录。
 
-![登录页：用户名、密码输入框与「登录」按钮](placeholder)
+![图 2：登录页——输入用户名、密码后点「登录」](/manual/02-login.png)
 
 > 登录不上？确认账号是否已由管理员创建、密码是否正确；连续失败请联系管理员，不要自行反复尝试。
 
@@ -70,7 +71,7 @@ export const MANUAL_DEFAULT_CONTENT = `# 科应共享账号管理平台 · 使�
 
 登录后进入首页，顶部显示当前**可用账号数量**。点击 **「领取账号」**，系统会为你分配一个当前空闲的账号。
 
-![看板首页：账号余量统计与「领取账号」按钮](placeholder)
+![图 3：看板首页——账号余量统计与「我要使用科应」入口](/manual/03-home-claim.png)
 
 若提示「暂无可用账号」，说明账号都被占用了，稍等几分钟再试——归还后账号需要几十秒自动改密才会重新变为可用。
 
@@ -78,7 +79,7 @@ export const MANUAL_DEFAULT_CONTENT = `# 科应共享账号管理平台 · 使�
 
 领取成功后进入「我的账号」页，卡片上会显示：账号名称、已用时长、**剩余租期倒计时**。点击 **「打开科应」**，浏览器会自动新开标签页并**自动完成登录**。
 
-![我的账号页：账号卡片、倒计时与「打开科应」「立即归还」按钮](placeholder)
+![图 4：「我的账号」页——账号卡片、倒计时与操作按钮](/manual/04-my-account.png)
 
 > 如果点「打开科应」只打开了登录页而没有自动登录，说明浏览器助手没装好或没生效，请直接跳到[第 3 章](#3-浏览器助手扩展安装)。
 
@@ -97,7 +98,7 @@ export const MANUAL_DEFAULT_CONTENT = `# 科应共享账号管理平台 · 使�
 
 归还后系统会**自动改密**，账号回到「回收中」，约几十秒后重新变为「可用」。
 
-![归还流程：点击立即归还 → 账号进入回收中 → 自动改密 → 重新可用](placeholder)
+![图 5：点击「立即归还」后，账号进入回收中](/manual/05-return-flow.png)
 
 ---
 
@@ -122,7 +123,7 @@ export const MANUAL_DEFAULT_CONTENT = `# 科应共享账号管理平台 · 使�
 
 不知道下载到哪了？按 \`Ctrl + J\` 打开浏览器的下载列表查看。
 
-![下载入口：顶栏助手状态条与下载图标特写](placeholder)
+![图 6：顶栏助手状态条与下载入口](/manual/06-download-entry.png)
 
 ### 3.3 解压（关键一步，别跳过）
 
@@ -132,7 +133,7 @@ export const MANUAL_DEFAULT_CONTENT = `# 科应共享账号管理平台 · 使�
    - 正确：\`C:\\ScienceingAssistant\\manifest.json\`
    - 错误：\`C:\\ScienceingAssistant\\科应共享账号助手_v1.3.0\\manifest.json\`
 
-![解压后的目录结构：manifest.json 位于根目录，而不是多套一层子文件夹](placeholder)
+![图 7：解压后的目录结构——manifest.json 必须位于根目录](/manual/07-extract-folder.png)
 
 > **三条铁律**
 > 1. 这个文件夹要**一直保留**，不要删除、移动、改名——插件是"加载已解压扩展"方式运行的，随时读取它。删了插件立即失效。
@@ -147,7 +148,7 @@ export const MANUAL_DEFAULT_CONTENT = `# 科应共享账号管理平台 · 使�
 4. 选中 3.3 里解压好的文件夹 → **「选择文件夹」**；
 5. 列表出现 **「科应共享账号助手」** 卡片（带版本号）且**无红色报错**，即安装成功。
 
-![Chrome 扩展管理页：右上角开发者模式开关 + 左上角「加载已解压的扩展程序」按钮](placeholder)
+![图 8：Chrome 扩展管理页——右上角开发者模式开关与「加载已解压的扩展程序」](/manual/08-chrome-extensions.png)
 
 ### 3.5 在 Edge 中安装
 
@@ -157,7 +158,7 @@ export const MANUAL_DEFAULT_CONTENT = `# 科应共享账号管理平台 · 使�
 4. 选中解压文件夹 → **「选择文件夹」**；
 5. 出现「科应共享账号助手」卡片且无红色报错即成功。
 
-![Edge 扩展管理页：左下角开发人员模式开关 + 「加载解压缩的扩展」按钮](placeholder)
+![图 9：Edge 扩展管理页——开发人员模式开关在左下角](/manual/09-edge-extensions.png)
 
 > 若提示 \`Manifest file is missing or unreadable\`，是选错了文件夹层级，见 [6.1](#61-加载时报错清单文件缺失manifest-file-is-missing-or-unreadable)。
 
@@ -177,7 +178,7 @@ export const MANUAL_DEFAULT_CONTENT = `# 科应共享账号管理平台 · 使�
 | ④ 悬浮窗 | 看科应页面**右下角** | 出现圆形倒计时环（绿色 + 释放时间） |
 | ⑤ 续期与归还 | 在科应页点几下 / 滚一滚 → 再点「立即归还」 | 时间回到满格；点归还后跳回看板并释放账号 |
 
-![安装成功标志：扩展列表出现「科应共享账号助手」卡片，无红色报错](placeholder)
+![图 10：安装成功标志——出现「科应共享账号助手」卡片且无红色报错](/manual/10-extension-card.png)
 
 ### 4.2 悬浮窗状态对照表
 
@@ -190,7 +191,9 @@ export const MANUAL_DEFAULT_CONTENT = `# 科应共享账号管理平台 · 使�
 | ⚪ 灰色「未绑」 | 当前没绑定账号 | 回看板领取账号 |
 | ⚪ 灰色「已释放」 | 租期已结束 | 点「返回看板」重新领取 |
 
-![科应页面右下角倒计时悬浮窗：绿色圆环 + 剩余时间 + 立即归还按钮](placeholder)
+![图 11：科应页面右下角的倒计时悬浮窗（点击可弹出使用信息）](/manual/11-floating-ring.png)
+
+![图 12：悬浮窗环色状态对照（绿/黄/红/灰）](/manual/12-ring-states.png)
 
 ### 4.3 命令行级别的自检（进阶）
 
@@ -217,7 +220,7 @@ export const MANUAL_DEFAULT_CONTENT = `# 科应共享账号管理平台 · 使�
 
 可视化查看：账号状态分布、账号负载 TOP10、密码健康度与异常清单、改密任务成功率、近 30 天领用趋势、用户活跃排行、释放原因构成。右上角可切换 7/30/90 天。
 
-![管理后台数据看板：KPI 卡片 + 环形图 + 趋势折线 + 排行榜](placeholder)
+![图 13：管理后台数据看板](/manual/13-admin-dashboard.png)
 
 ### 5.4 系统参数（管理后台 → 系统参数）
 

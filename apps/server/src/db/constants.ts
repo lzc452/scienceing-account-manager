@@ -60,6 +60,8 @@ export const AUDIT_ACTION = {
   USER_CREATE: 'USER_CREATE',
   USER_UPDATE: 'USER_UPDATE',
   USER_PASSWORD_RESET: 'USER_PASSWORD_RESET',
+  /** 用户本人修改自己的登录密码（含首次登录强制改密） */
+  PASSWORD_CHANGE: 'PASSWORD_CHANGE',
   CLAIM_ACCOUNT: 'CLAIM_ACCOUNT',
   ACTIVITY: 'ACTIVITY',
   RELEASE: 'RELEASE',
@@ -106,6 +108,7 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   USER_CREATE: '新增用户',
   USER_UPDATE: '修改用户',
   USER_PASSWORD_RESET: '重置用户密码',
+  PASSWORD_CHANGE: '修改登录密码',
   USER_BULK_CREATE: '批量导入用户',
   CLAIM_ACCOUNT: '领取账号',
   ACTIVITY: '活跃上报',
