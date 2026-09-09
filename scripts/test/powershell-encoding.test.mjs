@@ -1,8 +1,9 @@
 /* global process */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 
@@ -39,5 +40,41 @@ test('Windows PowerShell 5.1 能解析发布脚本', { skip: process.platform !=
       encoding: 'utf8',
     });
     assert.equal(result.status, 0, `${relativePath} 解析失败：${result.stdout}${result.stderr}`);
+  }
+});
+
+test('Windows PowerShell 5.1 能清理 pnpm 风格的长路径目录', { skip: process.platform !== 'win32' }, () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'scienceing-cleanup-test-'));
+  let nestedPath = tempRoot;
+  while (nestedPath.length < 320) {
+    nestedPath = join(
+      nestedPath,
+      'node_modules',
+      '.pnpm',
+      '@nestjs+common@11.2.3_reflect-metadata_long-segment',
+    );
+  }
+  mkdirSync(nestedPath, { recursive: true });
+  writeFileSync(join(nestedPath, 'create-route-param-metadata.decorator.d.ts'), 'fixture');
+
+  try {
+    const commonScript = resolve(ROOT, 'deploy-lan/scripts/release-common.ps1').replaceAll("'", "''");
+    const escapedTempRoot = tempRoot.replaceAll("'", "''");
+    const command = `. '${commonScript}'; Remove-DirectoryTree -Path '${escapedTempRoot}'`;
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+      encoding: 'utf8',
+    });
+
+    assert.equal(result.status, 0, `长路径清理失败：${result.stdout}${result.stderr}`);
+    assert.equal(existsSync(tempRoot), false, '长路径临时目录应被完整删除');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('Release 脚本统一使用长路径安全清理函数', () => {
+  for (const relativePath of ['create-release.ps1', 'deploy-release.ps1']) {
+    const source = readFileSync(resolve(ROOT, relativePath), 'utf8');
+    assert.match(source, /Remove-DirectoryTree -Path /, `${relativePath} 必须使用长路径安全清理函数`);
   }
 });

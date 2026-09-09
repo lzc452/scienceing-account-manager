@@ -20,6 +20,47 @@ function Invoke-NativeChecked {
     }
 }
 
+function Remove-DirectoryTree {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $pathRoot = [System.IO.Path]::GetPathRoot($fullPath).TrimEnd('\')
+    if ($fullPath -eq $pathRoot) {
+        throw "拒绝删除文件系统根目录：$fullPath"
+    }
+    if (-not [System.IO.Directory]::Exists($fullPath)) { return }
+
+    # Windows PowerShell 5.1 的 Remove-Item 仍受传统 MAX_PATH 限制。
+    # Directory.Delete 配合扩展路径前缀可清理 pnpm 生成的深层 node_modules。
+    if ($fullPath.StartsWith('\\?\')) {
+        $extendedPath = $fullPath
+    }
+    elseif ($fullPath.StartsWith('\\')) {
+        $extendedPath = '\\?\UNC\' + $fullPath.Substring(2)
+    }
+    else {
+        $extendedPath = '\\?\' + $fullPath
+    }
+
+    $lastError = $null
+    foreach ($attempt in 1..3) {
+        try {
+            [System.IO.Directory]::Delete($extendedPath, $true)
+            return
+        }
+        catch [System.IO.DirectoryNotFoundException] {
+            if (-not [System.IO.Directory]::Exists($extendedPath)) { return }
+            $lastError = $_.Exception
+        }
+        catch {
+            $lastError = $_.Exception
+        }
+        if ($attempt -lt 3) { Start-Sleep -Milliseconds (100 * $attempt) }
+    }
+
+    throw "无法清理目录：$fullPath。$($lastError.Message)"
+}
+
 function Resolve-DevelopmentShare {
     param(
         [string]$DevHost = '1399-IT-100158',

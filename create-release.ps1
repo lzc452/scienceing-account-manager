@@ -185,6 +185,11 @@ finally {
     $resolvedBase = [System.IO.Path]::GetFullPath($tempBase)
     if ($resolvedTemp.StartsWith($resolvedBase, [System.StringComparison]::OrdinalIgnoreCase) -and
         (Test-Path -LiteralPath $resolvedTemp)) {
-        Remove-Item -LiteralPath $resolvedTemp -Recurse -Force
+        try {
+            Remove-DirectoryTree -Path $resolvedTemp
+        }
+        catch {
+            Write-Warning "临时 Release 目录清理失败，可稍后手动删除：$resolvedTemp。$($_.Exception.Message)"
+        }
     }
 }

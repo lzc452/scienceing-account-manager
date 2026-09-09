@@ -292,7 +292,12 @@ finally {
         $resolvedStage = [System.IO.Path]::GetFullPath($staging)
         $resolvedRun = [System.IO.Path]::GetFullPath((Join-Path $InstallRoot 'run')) + [System.IO.Path]::DirectorySeparatorChar
         if ($resolvedStage.StartsWith($resolvedRun, [System.StringComparison]::OrdinalIgnoreCase)) {
-            Remove-Item -LiteralPath $resolvedStage -Recurse -Force
+            try {
+                Remove-DirectoryTree -Path $resolvedStage
+            }
+            catch {
+                Write-Warning "部署暂存目录清理失败，可稍后手动删除：$resolvedStage。$($_.Exception.Message)"
+            }
         }
     }
 }
