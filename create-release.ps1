@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$Tag,
     [string]$LanGitPath = 'E:\git-local-share\scienceing.git',
-    [string]$OutputDirectory = 'E:\git-local-share\releases'
+    [string]$OutputDirectory = 'E:\git-local-share\releases',
+    [switch]$SkipTests
 )
 
 Set-StrictMode -Version Latest
@@ -69,11 +70,10 @@ try {
     [System.IO.Compression.ZipFile]::ExtractToDirectory($sourceZip, $sourceRoot)
 
     $node = Get-ReleaseNode
-    $pnpmCommand = (Get-Command pnpm.cmd -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1)
-    if (-not $pnpmCommand) {
-        $pnpmCommand = (Get-Command pnpm -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1)
-    }
-    if (-not $pnpmCommand) { throw '开发机未找到 pnpm。' }
+    # pnpm 可能只以 corepack shim 形式存在而实际不可用：统一走 Resolve-PnpmCommand
+    # （PATH → 隔离缓存 → npm 全局安装 → 隔离目录安装），全部无需管理员权限。
+    $pnpm = Resolve-PnpmCommand
+    Write-Host "[release] pnpm：$($pnpm.Exe) $($pnpm.Prefix -join ' ')"
 
     $oldCi = $env:CI
     $oldNodeEnv = $env:NODE_ENV
@@ -82,7 +82,7 @@ try {
         $env:CI = 'true'
         $env:NODE_ENV = 'development'
         $env:VITE_USE_MOCK = 'false'
-        Invoke-NativeChecked -Command $pnpmCommand -Arguments @('install', '--frozen-lockfile') -WorkingDirectory $sourceRoot
+        Invoke-Pnpm -Pnpm $pnpm -Arguments @('install', '--frozen-lockfile') -WorkingDirectory $sourceRoot
 
         $tsc = Join-Path $sourceRoot 'node_modules\typescript\bin\tsc'
         Invoke-NativeChecked -Command $node -Arguments @($tsc, '-p', (Join-Path $sourceRoot 'packages\shared\tsconfig.json')) -WorkingDirectory $sourceRoot
@@ -92,6 +92,11 @@ try {
         $vite = Join-Path $sourceRoot 'apps\web\node_modules\vite\bin\vite.js'
         Invoke-NativeChecked -Command $node -Arguments @($vite, 'build', '--configLoader', 'native') -WorkingDirectory (Join-Path $sourceRoot 'apps\web')
         Invoke-NativeChecked -Command $node -Arguments @((Join-Path $sourceRoot 'apps\extension\scripts\validate.mjs')) -WorkingDirectory (Join-Path $sourceRoot 'apps\extension')
+
+        if ($SkipTests) {
+            Write-Host '[release] -SkipTests：跳过扩展/后端/Worker 测试'
+        }
+        else {
         $extensionTests = Get-ChildItem -LiteralPath (Join-Path $sourceRoot 'apps\extension\test') -Filter '*.test.mjs' |
             Select-Object -ExpandProperty FullName
         Invoke-NativeChecked -Command $node -Arguments (@('--test') + $extensionTests) -WorkingDirectory $sourceRoot
@@ -110,11 +115,12 @@ try {
         if ($workerTests) {
             Invoke-NativeChecked -Command $node -Arguments (@('--test', '--test-isolation=none') + $workerTests) -WorkingDirectory $sourceRoot
         }
+        }
 
-        Invoke-NativeChecked -Command $pnpmCommand -Arguments @(
+        Invoke-Pnpm -Pnpm $pnpm -Arguments @(
             '--config.node-linker=hoisted', '--filter', '@scienceing/server', 'deploy', '--prod', $serverDeploy
         ) -WorkingDirectory $sourceRoot
-        Invoke-NativeChecked -Command $pnpmCommand -Arguments @(
+        Invoke-Pnpm -Pnpm $pnpm -Arguments @(
             '--config.node-linker=hoisted', '--filter', '@scienceing/playwright-worker', 'deploy', '--prod', $workerDeploy
         ) -WorkingDirectory $sourceRoot
     }
@@ -140,6 +146,14 @@ try {
     }
     Copy-DirectoryContents -Source (Join-Path $sourceRoot 'deploy-lan\scripts') -Destination (Join-Path $bundleRoot 'deploy-lan\scripts')
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'deploy-lan\config.env') -Destination (Join-Path $bundleRoot 'deploy-lan\config.env') -Force
+
+    # 生产机一键运维入口随包分发：即便生产机没有 git 工作区，也能在 Release 目录直接部署
+    foreach ($name in @('deploy-release.ps1', 'sync-from-dev.ps1', 'deploy-prod.bat')) {
+        $source = Join-Path $sourceRoot $name
+        if (Test-Path -LiteralPath $source) {
+            Copy-Item -LiteralPath $source -Destination (Join-Path $bundleRoot $name) -Force
+        }
+    }
 
     $schemaVersionText = (& $node (Join-Path $bundleServer 'dist\db\schema-version.js') 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $schemaVersionText -notmatch '^\d+$') {

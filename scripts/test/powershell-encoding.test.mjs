@@ -11,6 +11,7 @@ const ROOT = resolve(import.meta.dirname, '..', '..');
 const POWERSHELL_SCRIPTS = [
   'create-release.ps1',
   'deploy-release.ps1',
+  'make-release.ps1',
   'sync-from-dev.ps1',
   'deploy-lan/scripts/release-common.ps1',
   'apps/server/test/acceptance-smoke.ps1',
@@ -77,4 +78,28 @@ test('Release 脚本统一使用长路径安全清理函数', () => {
     const source = readFileSync(resolve(ROOT, relativePath), 'utf8');
     assert.match(source, /Remove-DirectoryTree -Path /, `${relativePath} 必须使用长路径安全清理函数`);
   }
+});
+
+test('数据库维护命令不会把 Node stderr 警告当成部署失败', { skip: process.platform !== 'win32' }, () => {
+  const nodePath = process.execPath.replaceAll("'", "''");
+  const command = [
+    "$ErrorActionPreference='Stop'",
+    `$lines=@(& '${nodePath}' -e "process.emitWarning('sqlite-warning','ExperimentalWarning');console.log(JSON.stringify({ok:true}))")`,
+    '$exitCode=$LASTEXITCODE',
+    "$jsonLine=$lines|Where-Object{$_.TrimStart().StartsWith('{')}|Select-Object -Last 1",
+    'if($exitCode -ne 0 -or -not $jsonLine){exit 1}',
+    '$result=$jsonLine|ConvertFrom-Json',
+    'if(-not $result.ok){exit 1}',
+  ].join(';');
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, `stderr 警告仍被误判：${result.stdout}${result.stderr}`);
+
+  const deploySource = readFileSync(resolve(ROOT, 'deploy-release.ps1'), 'utf8');
+  assert.doesNotMatch(
+    deploySource,
+    /\$lines\s*=\s*@\(& \$node \$script @Arguments 2>&1\)/,
+    'Invoke-Maintenance 只能捕获 stdout，不能把 Node warning 所在的 stderr 合并进去',
+  );
 });

@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$Tag,
+    [string]$Tag = 'latest',
     [string]$InstallRoot = 'D:\Applications\scienceing-account-manager-app',
     [string]$LegacyDatabasePath,
     [switch]$Initialize,
@@ -48,7 +48,9 @@ function Invoke-Maintenance {
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
     $script = Join-Path $ReleaseRoot 'apps\server\dist\db\maintenance.js'
-    $lines = @(& $node $script @Arguments 2>&1)
+    # 只捕获 stdout 中的 JSON。Windows PowerShell 5.1 会把合并进来的
+    # Node ExperimentalWarning(stderr) 转成 NativeCommandError，即使进程退出码为 0。
+    $lines = @(& $node $script @Arguments)
     $exitCode = $LASTEXITCODE
     $lines | ForEach-Object { Write-Host $_ }
     if ($exitCode -ne 0) { throw "数据库维护命令失败（$exitCode）：$($Arguments -join ' ')" }
@@ -91,6 +93,8 @@ function Invoke-LegacyCommand {
     }
 }
 
+$gitAvailable = [bool](Get-Command git -ErrorAction SilentlyContinue)
+$transcriptStarted = $false
 try {
     $lock = New-Object System.IO.FileStream(
         $lockPath,
@@ -99,11 +103,34 @@ try {
         [System.IO.FileShare]::None
     )
 
-    if (-not $SkipSync) {
-        & (Join-Path $PSScriptRoot 'sync-from-dev.ps1') -DevHost $DevHost -ShareName $ShareName
-        if ($LASTEXITCODE -ne 0) { throw 'sync-from-dev.ps1 执行失败。' }
-    }
     $share = Resolve-DevelopmentShare -DevHost $DevHost -ShareName $ShareName
+
+    if ($Tag -eq 'latest' -or -not $Tag) {
+        $Tag = Resolve-LatestReleaseTag -ShareRoot $share.Root
+        Write-Host "[deploy] 自动选择最新 Release：$Tag"
+    }
+    if ($Tag -notmatch '^v\d+\.\d+\.\d+$') { throw "Tag 必须符合 vX.Y.Z：$Tag" }
+
+    try {
+        $logDirectory = Join-Path $InstallRoot 'run'
+        [void](New-Item -ItemType Directory -Path $logDirectory -Force)
+        Start-Transcript -LiteralPath (Join-Path $logDirectory ("deploy-$Tag-" + (Get-Date).ToString('yyyyMMdd-HHmmss') + '.log')) -Force | Out-Null
+        $transcriptStarted = $true
+    }
+    catch {
+        Write-Warning "部署日志写入失败（不影响部署）：$($_.Exception.Message)"
+    }
+
+    if (-not $SkipSync) {
+        if ($gitAvailable) {
+            & (Join-Path $PSScriptRoot 'sync-from-dev.ps1') -DevHost $DevHost -ShareName $ShareName
+            if ($LASTEXITCODE -ne 0) { throw 'sync-from-dev.ps1 执行失败。' }
+        }
+        else {
+            Write-Warning '未检测到 git：跳过仓库同步，直接使用共享目录中的 Release（生产机纯部署模式）。'
+            $SkipSync = $true
+        }
+    }
     $zipName = "scienceing-$Tag.zip"
     $remoteZip = Join-Path $share.Root "releases\$zipName"
     $remoteSha = "$remoteZip.sha256"
@@ -123,8 +150,14 @@ try {
         throw "Release SHA256 校验失败：expected=$expectedHash actual=$actualHash"
     }
 
-    $tagCommit = (& git -C $PSScriptRoot rev-list -n 1 "$Tag^{commit}" 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or $tagCommit -notmatch '^[0-9a-f]{40}$') { throw "本地未获取到 Tag：$Tag" }
+    # 生产机可以不装 git（纯部署模式）：此时只校验 release.json 自身一致性
+    $tagCommit = $null
+    if ($gitAvailable) {
+        $tagCommit = (& git -C $PSScriptRoot rev-list -n 1 "$Tag^{commit}" 2>&1 | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $tagCommit -notmatch '^[0-9a-f]{40}$') {
+            throw "本地未获取到 Tag：$Tag（生产机未同步最新代码？先执行 .\sync-from-dev.ps1）"
+        }
+    }
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     if (-not (Test-Path -LiteralPath $targetRelease)) {
@@ -149,8 +182,12 @@ try {
     $releaseJsonPath = Join-Path $staging 'release.json'
     if (-not (Test-Path -LiteralPath $releaseJsonPath)) { throw 'Release 缺少 release.json。' }
     $release = Get-Content -LiteralPath $releaseJsonPath -Raw | ConvertFrom-Json
-    if ($release.version -ne $Tag -or $release.commit -ne $tagCommit -or $release.schemaVersion -notmatch '^\d+$') {
+    $commitMismatch = $gitAvailable -and ($release.commit -ne $tagCommit)
+    if ($release.version -ne $Tag -or $commitMismatch -or $release.schemaVersion -notmatch '^\d+$') {
         throw "release.json 与 Tag 不一致：version=$($release.version) commit=$($release.commit)"
+    }
+    if (-not $gitAvailable) {
+        Write-Host '[deploy] 未检测到 git：已跳过 commit 一致性校验（纯 SMB 部署模式）'
     }
     $compiledSchema = (& $node (Join-Path $staging 'apps\server\dist\db\schema-version.js') 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or [int]$compiledSchema -ne [int]$release.schemaVersion) {
@@ -229,6 +266,8 @@ try {
 
     $databaseMayHaveChanged = $true
     Invoke-ReleaseCommand -ReleaseRoot $targetRelease -Command 'db:migrate'
+    # 结构兜底：即便历史环境漏过迁移，db:doctor 也会按 Release 内迁移定义补齐表/列（幂等）
+    Invoke-ReleaseCommand -ReleaseRoot $targetRelease -Command 'db:doctor' -Arguments @('--fix', '--quiet')
     if ($Initialize -and -not $LegacyDatabasePath) {
         Invoke-ReleaseCommand -ReleaseRoot $targetRelease -Command 'db:seed'
     }
@@ -249,6 +288,8 @@ try {
     Write-Host "部署成功：$Tag -> $targetRelease"
     Write-Host "生产数据库：$databasePath"
     Write-Host "发布前备份：$predeployBackup"
+    Write-Host ''
+    Invoke-ReleaseCommand -ReleaseRoot $targetRelease -Command 'status'
 }
 catch {
     $failure = $_
@@ -299,5 +340,8 @@ finally {
                 Write-Warning "部署暂存目录清理失败，可稍后手动删除：$resolvedStage。$($_.Exception.Message)"
             }
         }
+    }
+    if ($transcriptStarted) {
+        try { Stop-Transcript | Out-Null } catch { }
     }
 }

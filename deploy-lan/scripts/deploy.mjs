@@ -15,6 +15,7 @@
  *   build             只构建不启动（server/web/worker + 扩展 zip）
  *   nginx:test        测试隔离 nginx 实例配置（含输出）
  *   extension:pack    仅把扩展替换为 LAN 地址并打包 zip
+ *   db:doctor         数据库结构体检/自愈（直接解析源码迁移，dist 旧也能补齐表/列）
  *   db:reset-admin    把 admin 口令重置为仓库 .env 的 ADMIN_INITIAL_PASSWORD
  *   env:print         打印解析后的关键环境配置（不含密码明文以外的敏感值结构）
  *   env:init          生成/补全仓库根 .env 模板（新电脑首选；不覆盖已有值；master key 缺失时随机生成）
@@ -366,6 +367,42 @@ async function buildWorker({ nodeBin }) {
   await run(nodeBin, [tsc, '-p', join(WORKER_DIR, 'tsconfig.json')], { cwd: REPO_ROOT });
 }
 
+/**
+ * 启动前数据库结构保障。
+ *
+ * 为什么需要：dist/ 与 node_modules/ 都在 .gitignore 中，通过 git 同步到生产机只带源码。
+ * 若生产机没重新编译就启动旧 dist，migrate() 只会跑到旧版本，新功能的表/列永远不创建
+ * （表现为"代码是新的，功能却不生效"，如 t14 首次登录强制改密依赖 users.must_change_password）。
+ * db-doctor 直接解析源码迁移 SQL 做幂等补齐，不依赖编译产物，因此作为最后一道防线。
+ */
+async function ensureSchema({ nodeBin }) {
+  if (!existsSync(DB_FILE)) {
+    log('数据库尚不存在，跳过结构自检（本次部署会初始化）');
+    return;
+  }
+  section('数据库结构自检（db-doctor）');
+  const script = join(REPO_ROOT, 'deploy-lan', 'scripts', 'db-doctor.mjs');
+  const r = spawnSync(nodeBin, [script, '--fix', '--quiet'], {
+    cwd: REPO_ROOT, env: productionEnv(), encoding: 'utf8', windowsHide: true,
+  });
+  const out = `${r.stdout || ''}${r.stderr || ''}`.trim();
+  if (r.status !== 0) {
+    die(`数据库结构自检/修复失败（退出码 ${r.status}）：\n${out || '（无输出）'}`);
+  }
+  if (out) log(out.replace(/^\[db-doctor\]\s*/, ''));
+
+  // 迁移数量对比：源码比 dist 多 ⇒ 产物是旧的（库结构虽已补齐，运行逻辑仍旧）
+  const countMigrations = (dir, ext) => (existsSync(dir)
+    ? readdirSync(dir).filter((f) => new RegExp(`^\\d+_.*\\.${ext}$`).test(f)).length
+    : 0);
+  const srcCount = countMigrations(join(APP_SERVER, 'src', 'db', 'migrations'), 'ts');
+  const distCount = countMigrations(join(APP_SERVER, 'dist', 'db', 'migrations'), 'js');
+  if (srcCount > distCount) {
+    log(`⚠ 后端编译产物落后于源码（源码迁移 ${srcCount} 个 / dist ${distCount} 个）。`);
+    log('  库结构已由 db-doctor 补齐，但运行的代码仍是旧版本 → 请执行 build / deploy 重新编译后端。');
+  }
+}
+
 async function setupDatabase({ nodeBin, seed = false }) {
   section(seed ? '数据库迁移与首次初始化种子' : '数据库迁移');
   mkdirSync(dirname(DB_FILE), { recursive: true });
@@ -590,6 +627,7 @@ async function fullDeploy({ nodeBin, cfg, backendPort, gatewayPort, lan, initial
     die(`生产数据库不存在：${DB_FILE}。首次空库部署须加 --initialize；旧库迁移请使用根目录 deploy-release.ps1 -LegacyDatabasePath。`);
   }
   await setupDatabase({ nodeBin, seed: initialize });
+  await ensureSchema({ nodeBin });
 
   // 3) 前端
   await buildWeb({ nodeBin });
@@ -647,6 +685,7 @@ async function cmdStart() {
   }
   await stopBackend({ backendPort });
   await stopGateway({ gatewayPort, nginxExe: cfg.NGINX_EXE });
+  await ensureSchema({ nodeBin });
   await startBackend({ nodeBin, backendPort });
   const mode = await startGateway({ nodeBin, cfg, gatewayPort, backendPort, lanIp: lan.ip });
   writeJson(join(RUN_DIR, 'state.json'), { mode, backendPort, gatewayPort, lanIp: lan.ip, startedAt: new Date().toISOString() });
@@ -700,6 +739,16 @@ async function cmdDbRestore(argv) {
 
 async function cmdDbVerify() {
   await runDatabaseCli('verify.js', []);
+}
+
+/** 数据库结构体检/自愈（解析源码迁移，不依赖 dist）：db:doctor [--fix] [--database <path>] … */
+async function cmdDbDoctor(argv) {
+  const rt = await resolveRuntime();
+  const script = join(REPO_ROOT, 'deploy-lan', 'scripts', 'db-doctor.mjs');
+  const r = spawnSync(rt.nodeBin, [script, ...argv], {
+    cwd: REPO_ROOT, env: productionEnv(), stdio: 'inherit', windowsHide: true,
+  });
+  process.exit(r.status ?? 1);
 }
 
 async function cmdNginxTest() {
@@ -820,6 +869,7 @@ const SUB = {
   'db:import': cmdDbImport,
   'db:restore': cmdDbRestore,
   'db:verify': cmdDbVerify,
+  'db:doctor': cmdDbDoctor,
   'db:reset-admin': cmdResetAdmin,
   'env:print': cmdEnvPrint,
   'env:init': cmdEnvInit,
