@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$DevHost = '1399-IT-100158',
     [string]$ShareName = 'git-local-share',

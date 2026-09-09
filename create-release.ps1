@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Tag,
     [string]$LanGitPath = 'E:\git-local-share\scienceing.git',

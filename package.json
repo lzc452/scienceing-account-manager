@@ -13,6 +13,7 @@
     "dev:reset": "node scripts/dev.mjs --reset",
     "dev:rebuild": "node scripts/dev.mjs --rebuild",
     "test:dev-package": "node --test scripts/test/development-extension-package.test.mjs",
+    "test:release-scripts": "node --test scripts/test/powershell-encoding.test.mjs",
     "db:migrate": "pnpm --filter @scienceing/server db:migrate",
     "db:seed": "pnpm --filter @scienceing/server db:seed",
     "typecheck": "tsc --noEmit",

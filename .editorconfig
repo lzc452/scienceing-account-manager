@@ -1,0 +1,10 @@
+root = true
+
+[*]
+charset = utf-8
+insert_final_newline = true
+
+[*.ps1]
+# Windows PowerShell 5.1 treats UTF-8 without BOM as the system ANSI code page.
+charset = utf-8-bom
+end_of_line = crlf

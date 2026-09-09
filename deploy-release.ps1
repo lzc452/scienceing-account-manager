@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Tag,
     [string]$InstallRoot = 'D:\Applications\scienceing-account-manager-app',

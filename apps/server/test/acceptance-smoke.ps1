@@ -1,4 +1,4 @@
-# Scienceing acceptance smoke test (PRD §60 HTTP-side evidence)
+﻿# Scienceing acceptance smoke test (PRD §60 HTTP-side evidence)
 # Precondition: server running on PORT=3100 with DATABASE_PATH=data/acceptance.db, RESET_INTERVAL_MS=1500
 $ErrorActionPreference = 'Stop'
 $base = 'http://localhost:3100/api'
