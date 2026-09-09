@@ -7,7 +7,7 @@ const { resolve } = require('node:path');
 const bcrypt = require('bcryptjs');
 
 // 数据库路径（与 server 默认一致，可用 DATABASE_PATH 覆盖）
-const DB_PATH = process.env.DATABASE_PATH ?? resolve(__dirname, '..', '..', 'data', 'scienceing.db');
+const DB_PATH = process.env.DATABASE_PATH ?? resolve(__dirname, '..', '..', 'data', 'scienceing.dev.db');
 
 // ★ 改这里：要创建的员工账号（密码会经 bcrypt 哈希后入库，绝不存明文）
 const EMPLOYEES = [

@@ -1,3 +1,4 @@
+/* global Buffer, console, process, setTimeout */
 /**
  * lib.mjs —— 内网部署共享工具（零第三方依赖）
  *
@@ -17,10 +18,14 @@ import { fileURLToPath } from 'node:url';
 export const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
 export const DEPLOY_DIR = resolve(SCRIPTS_DIR, '..');           // <repo>/deploy-lan
 export const REPO_ROOT = resolve(DEPLOY_DIR, '..');             // 仓库根
-export const RUN_DIR = join(DEPLOY_DIR, 'run');
-export const DIST_DIR = join(DEPLOY_DIR, 'dist');
-export const NGINX_PREFIX = join(DEPLOY_DIR, 'nginx-prefix');
-export const EXT_LAN_DIR = join(DEPLOY_DIR, 'extension-lan');
+export const RUNTIME_ROOT = process.env.SCIENCEING_RUNTIME_DIR
+  ? resolve(process.env.SCIENCEING_RUNTIME_DIR)
+  : REPO_ROOT;
+const EXTERNAL_RUNTIME = RUNTIME_ROOT !== REPO_ROOT;
+export const RUN_DIR = EXTERNAL_RUNTIME ? join(RUNTIME_ROOT, 'run') : join(DEPLOY_DIR, 'run');
+export const DIST_DIR = EXTERNAL_RUNTIME ? join(RUNTIME_ROOT, 'packages') : join(DEPLOY_DIR, 'dist');
+export const NGINX_PREFIX = EXTERNAL_RUNTIME ? join(RUNTIME_ROOT, 'nginx-prefix') : join(DEPLOY_DIR, 'nginx-prefix');
+export const EXT_LAN_DIR = EXTERNAL_RUNTIME ? join(RUNTIME_ROOT, 'extension-lan') : join(DEPLOY_DIR, 'extension-lan');
 
 export const APP_SERVER = join(REPO_ROOT, 'apps', 'server');
 export const APP_WEB = join(REPO_ROOT, 'apps', 'web');
@@ -30,11 +35,12 @@ export const WEB_DIST = join(APP_WEB, 'dist');
 export const WEB_DOWNLOADS_DIR = join(WEB_DIST, 'downloads');   // 前端静态下载目录（扩展 zip 落这里，由网关直接托管）
 export const EXT_PACKAGE_ZIP = 'scienceing-extension.zip';      // 固定文件名：看板下载入口始终指向它
 export const EXT_PACKAGE_JSON = 'extension.json';               // 包元信息：版本/大小/更新时间
-export const DATA_DIR = join(REPO_ROOT, 'data');
-export const DB_FILE = join(DATA_DIR, 'scienceing.db');
+export const DATA_DIR = join(RUNTIME_ROOT, 'data');
+export const DB_FILE = join(DATA_DIR, 'scienceing.prod.db');
+export const BACKUP_DIR = join(RUNTIME_ROOT, 'backups');
 
-export const ENV_FILE = join(REPO_ROOT, '.env');
-export const CFG_FILE = join(DEPLOY_DIR, 'config.env');
+export const ENV_FILE = join(RUNTIME_ROOT, '.env');
+export const CFG_FILE = EXTERNAL_RUNTIME ? join(RUNTIME_ROOT, 'config.env') : join(DEPLOY_DIR, 'config.env');
 
 export const BACKEND_DEFAULT_PORT = 3000;
 export const GATEWAY_DEFAULT_PORT = 18080;
@@ -118,13 +124,31 @@ export function readEnvFile(file) {
   return parseEnvFile(readFileSync(file, 'utf8'));
 }
 
-/** 合并环境变量：默认 < 仓库 .env < config.env < process.env（只注入未占用的键）。 */
+/** 合并环境变量：.env < config.env < process.env < extra。extra 用于强制安全边界。 */
 export function mergedEnv(extra = {}) {
-  const env = { ...process.env };
-  for (const [k, v] of Object.entries({ ...readEnvFile(ENV_FILE), ...readEnvFile(CFG_FILE), ...extra })) {
-    if (env[k] === undefined && v !== undefined && v !== '') env[k] = String(v);
+  const env = {};
+  for (const [k, v] of Object.entries({
+    ...readEnvFile(ENV_FILE),
+    ...readEnvFile(CFG_FILE),
+    ...process.env,
+    ...extra,
+  })) {
+    if (v !== undefined && v !== '') env[k] = String(v);
   }
   return env;
+}
+
+/** 生产子进程永远绑定稳定数据目录，调用者/.env 无法把它改回开发库。 */
+export function productionEnv(extra = {}) {
+  return mergedEnv({
+    NODE_ENV: 'production',
+    SCIENCEING_RUNTIME_DIR: RUNTIME_ROOT,
+    DATABASE_PATH: DB_FILE,
+    SCIENCEING_BACKUP_DIR: BACKUP_DIR,
+    SCIENCING_WORKER_CLI: join(WORKER_DIR, 'dist', 'cli.js'),
+    SCIENCING_STORAGE_STATE: join(RUNTIME_ROOT, 'playwright', '.auth', 'admin.json'),
+    ...extra,
+  });
 }
 
 // ───────────────────────── Node 运行时探测 ─────────────────────────

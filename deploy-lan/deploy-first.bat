@@ -1,7 +1,7 @@
 @echo off
 rem ============================================================
 rem  scienceing-account-manager  Intranet Deploy  (First / Full)
-rem  Deploy steps: build server+web+worker, migrate+seed DB,
+rem  Legacy new/empty install only: build, migrate+seed DB,
 rem  start backend (:3000) + gateway (nginx preferred, node fallback)
 rem  then pack the LAN edition browser extension (.zip).
 rem ============================================================
@@ -23,7 +23,7 @@ echo   First-time full deployment (this usually takes 1-3 min)
 echo   Gateway port defaults to 18080, backend to 3000.
 echo   Edit deploy-lan\config.env to change ports / LAN IP.
 echo ============================================================
-"%NODE_CMD%" deploy-lan\scripts\deploy.mjs deploy %*
+"%NODE_CMD%" deploy-lan\scripts\deploy.mjs deploy --initialize %*
 set "RC=%ERRORLEVEL%"
 echo.
 if "%RC%"=="0" (

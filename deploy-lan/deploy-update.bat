@@ -1,7 +1,7 @@
 @echo off
 rem ============================================================
-rem  Update deployment: recompile + migrate + restart services.
-rem  (Optional: add " --pull" to also `git pull --ff-only` first)
+rem  Legacy source-tree helper: recompile + migrate + restart.
+rem  Formal releases use root deploy-release.ps1; --pull is disabled.
 rem ============================================================
 chcp 65001 >nul
 setlocal EnableExtensions
@@ -18,7 +18,7 @@ if not defined NODE_CMD (
 
 echo ============================================================
 echo   Update: rebuild + migrate + restart services
-echo   Run "deploy-update.bat --pull" to pull git changes first.
+echo   Formal release: use root sync-from-dev.ps1 + deploy-release.ps1.
 echo ============================================================
 "%NODE_CMD%" deploy-lan\scripts\deploy.mjs update %*
 set "RC=%ERRORLEVEL%"

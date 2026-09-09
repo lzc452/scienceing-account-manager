@@ -1,5 +1,7 @@
 # 科应共享账号管理平台
 
+> 生产发布、数据库迁移与备份见 [DEPLOYMENT.md](./DEPLOYMENT.md)。开发库为 `data/scienceing.dev.db`，生产库为 `scienceing.prod.db`，两者禁止复用。
+
 > Scienceing Shared Account Manager — 基于租约管理与自动回收的共享账号基础设施（PRD §62）。
 >
 > 核心逻辑一句话：**插件负责看（真实操作），后台负责算（租约/超时），Playwright 负责干（改密回收）。**
@@ -50,7 +52,7 @@ scienceing-account-manager/
 
 ### 前置要求
 
-- Node.js **≥ 20**（本项目在 Node 24 上开发/验证）
+- Node.js **≥ 22.5**（需内置 `node:sqlite`，推荐 Node 24）
 - pnpm **11**（`package.json` 已声明 `packageManager: pnpm@11.20.0`）
 
 ### 1. 安装依赖
@@ -112,7 +114,7 @@ pnpm --filter @scienceing/web dev
 | 变量 | 必填 | 默认值 | 说明 |
 |---|---|---|---|
 | `SCIENCEING_MASTER_KEY` | 生产必填 | 无（临时随机+告警） | AES-256-GCM Master Key，hex 64 字符 = 32 字节（PRD §41/§42） |
-| `DATABASE_PATH` | 否 | `data/scienceing.db` | SQLite 数据库路径 |
+| `DATABASE_PATH` | 否 | 开发 `data/scienceing.dev.db`；生产 `data/scienceing.prod.db` | SQLite 路径；环境后缀不匹配会拒绝启动 |
 | `PORT` | 否 | `3000` | 后端监听端口 |
 | `ADMIN_INITIAL_PASSWORD` | 否 | 无（缺失生成随机并打印） | 种子 admin 初始口令（首登须改） |
 | `SCIENCEING_EXTENSION_IDS` | 否 | 空 | 可选的 Chrome 扩展 ID 白名单（逗号分隔）；企业部署建议固定已签名扩展 ID |

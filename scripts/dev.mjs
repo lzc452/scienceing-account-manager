@@ -48,7 +48,8 @@ const WEB_DIR = join(ROOT, 'apps', 'web')
 const SERVER_DIST = join(SERVER_DIR, 'dist')
 const SERVER_MAIN = join(SERVER_DIST, 'main.js')
 const DB_DIR = join(ROOT, 'data')
-const DB_FILE = join(DB_DIR, 'scienceing.db')
+const DB_FILE = join(DB_DIR, 'scienceing.dev.db')
+const LEGACY_DB_FILE = join(DB_DIR, 'scienceing.db')
 const ENV_FILE = join(ROOT, '.env')
 const WEB_ENV_LOCAL = join(WEB_DIR, '.env.local')
 
@@ -87,7 +88,7 @@ if (flags.help) {
   pnpm dev                 装依赖 → 生成 .env → 打包扩展 → 编译 → 迁移 → 种子 → 后端 + 前端
   pnpm dev --only=server   只启动后端（:3000/api）
   pnpm dev --only=web      只启动前端（:5173，需后端已运行）
-  pnpm dev --reset         删除 data/scienceing.db 后重建（迁移 + 种子）
+  pnpm dev --reset         删除 data/scienceing.dev.db 后重建（迁移 + 种子）
   pnpm dev --rebuild       强制重新编译后端
   pnpm dev --reset-admin   把 admin 口令强制重置为 .env 中的 ADMIN_INITIAL_PASSWORD
   pnpm dev --no-install    跳过依赖检查（node_modules 已就绪时更快）
@@ -321,6 +322,9 @@ async function ensureEnv() {
   for (const [key, value] of parseEnvFile(readFileSync(ENV_FILE, 'utf8'))) {
     if (process.env[key] === undefined) process.env[key] = value
   }
+  // 开发入口强制绑定 dev.db，避免 .env 或父进程误指向生产数据库。
+  process.env.NODE_ENV = 'development'
+  process.env.DATABASE_PATH = DB_FILE
   info(`后端端口 PORT=${process.env.PORT}`)
 
   // WEB_PORT 可选：默认 5173（vite.config 固定端口），冲突时可临时改走其它端口
@@ -392,6 +396,10 @@ async function setupDatabase() {
   }
 
   const node = process.execPath
+  if (!flags.reset && !existsSync(DB_FILE) && existsSync(LEGACY_DB_FILE)) {
+    await run(node, ['dist/db/maintenance.js', 'import', '--source', LEGACY_DB_FILE, '--target', DB_FILE], SERVER_DIR)
+    info(`已将旧开发库一致性复制为 ${DB_FILE}（旧库及 WAL/SHM 保持不变）`)
+  }
   await run(node, ['dist/db/migrate.js'], SERVER_DIR)
   info('迁移完成')
 

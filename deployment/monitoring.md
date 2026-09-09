@@ -1,5 +1,7 @@
 # 监控、告警与巡检
 
+> Windows LAN 生产数据库为安装根目录下的 `data/scienceing.prod.db`；发布与备份策略见根目录 `DEPLOYMENT.md`。
+
 > 单机 MVP：优先「可观测的 SQL 巡检 + 端点健康探针」，不引入独立监控栈（PRD §3 不上额外基础设施）。
 
 ## 1. 核心健康探针

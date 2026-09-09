@@ -18,8 +18,8 @@ dist-build/
 
 # environment / secrets（PRD §42 管理员凭据只走环境变量）
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Playwright 管理员认证状态（最高敏感，PRD §29）
 playwright/.auth/
@@ -28,14 +28,26 @@ playwright/.auth/
 playwright/.worker-logs/
 
 # SQLite 数据库（PRD §55）
-data/*.db
-data/*.db-journal
-data/*.db-wal
-data/*.db-shm
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.dev.db*
+*.prod.db*
 
 # logs
 logs/
 *.log
+backups/
+backup/
+secrets/
+secret/
+*.bak
+*.backup
+*.secret
+*.pem
+*.pfx
+*.key
 
 # OS / editor 杂项
 .DS_Store
@@ -59,3 +71,5 @@ deploy-lan/extension-lan/
 /.tmp-deps/
 .tmp-build-check/
 dist-tmp-*/
+.release-tmp/
+*.copying-*

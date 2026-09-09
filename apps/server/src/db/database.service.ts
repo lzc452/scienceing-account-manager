@@ -1,7 +1,9 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { DatabaseSync } from 'node:sqlite';
+import { existsSync } from 'node:fs';
+import { backupIsStale, createDatabaseBackup } from './backup';
 import { openDatabase } from './connection';
-import { defaultDatabasePath } from './config';
+import { defaultBackupDirectory, defaultDatabasePath } from './config';
 import { migrate } from './migrate';
 
 /**
@@ -13,7 +15,13 @@ export class DatabaseService implements OnModuleDestroy {
   readonly db: DatabaseSync;
 
   constructor() {
-    this.db = openDatabase(defaultDatabasePath());
+    const databasePath = defaultDatabasePath();
+    const existed = existsSync(databasePath);
+    this.db = openDatabase(databasePath);
+    if (process.env.NODE_ENV === 'production' && existed && backupIsStale(defaultBackupDirectory())) {
+      const result = createDatabaseBackup(this.db, defaultBackupDirectory(), 'startup-catchup');
+      console.log(`[backup] 启动补备份完成：${result.path}`);
+    }
     migrate(this.db);
   }
 

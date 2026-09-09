@@ -1,5 +1,7 @@
 # 单机部署说明
 
+> Windows LAN 正式发布请以根目录 `DEPLOYMENT.md` 为准；生产机不直接拉 GitHub，也不复制开发数据库。
+
 > 第一阶段单机部署（PRD §55）：Web 前端 + Node 后端 + SQLite + 超时调度器 + Playwright Worker 全部跑在一台服务器上。不拆微服务，不上 Redis/Kafka（PRD §3）。
 
 ## 1. 架构

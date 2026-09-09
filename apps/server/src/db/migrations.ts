@@ -1,229 +1,26 @@
-export interface Migration {
-  version: number;
-  name: string;
-  sql: string;
-}
+import { migration001 } from './migrations/001_init_schema';
+import { migration002 } from './migrations/002_add_sessions';
+import { migration003 } from './migrations/003_settings_inactivity_minutes';
+import { migration004 } from './migrations/004_add_manuals';
+import { migration005 } from './migrations/005_add_first_login_flag';
+import { migration006 } from './migrations/006_add_extension_claim_proofs';
+import { migration007 } from './migrations/007_settings_lease_rule_hours';
+import type { Migration } from './migrations/migration';
+
+export type { Migration } from './migrations/migration';
 
 /**
- * 六张表 migration（PRD §39）：
- *   users / scienceing_accounts / leases / reset_jobs / audit_logs / system_settings
- *
- * 含 R1/R2 防御性部分唯一索引（PRD §57）：同一账号、同一用户同一时间最多一个 ACTIVE lease。
+ * 迁移只能追加；已经发布的 version/name/sql 不得修改。
+ * 每个迁移由 migrate.ts 在独立事务中执行并登记到 schema_migrations。
  */
-export const MIGRATIONS: Migration[] = [
-  {
-    version: 1,
-    name: 'init_schema',
-    sql: `
-      CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT NOT NULL UNIQUE,
-        display_name TEXT NOT NULL,
-        department TEXT NOT NULL DEFAULT '',
-        password_hash TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'USER' CHECK (role IN ('USER','ADMIN')),
-        enabled INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS scienceing_accounts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT NOT NULL UNIQUE,
-        username TEXT NOT NULL,
-        current_password_ciphertext TEXT,
-        pending_password_ciphertext TEXT,
-        status TEXT NOT NULL DEFAULT 'AVAILABLE'
-          CHECK (status IN ('AVAILABLE','IN_USE','RECYCLING','ERROR')),
-        last_password_changed_at TEXT,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS leases (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        lease_token_hash TEXT NOT NULL UNIQUE,
-        account_id INTEGER NOT NULL REFERENCES scienceing_accounts(id),
-        user_id INTEGER NOT NULL REFERENCES users(id),
-        status TEXT NOT NULL DEFAULT 'ACTIVE'
-          CHECK (status IN ('ACTIVE','RELEASE_REQUESTED','RECYCLING','RELEASED','FAILED')),
-        started_at TEXT NOT NULL,
-        last_activity_at TEXT NOT NULL,
-        release_requested_at TEXT,
-        released_at TEXT,
-        release_reason TEXT
-          CHECK (release_reason IN ('USER_RETURN','INACTIVITY_TIMEOUT','ADMIN_FORCE','RESET_ERROR')),
-        extension_version TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS reset_jobs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        account_id INTEGER NOT NULL REFERENCES scienceing_accounts(id),
-        lease_id INTEGER REFERENCES leases(id),
-        status TEXT NOT NULL DEFAULT 'PENDING'
-          CHECK (status IN ('PENDING','RUNNING','SUCCESS','FAILED')),
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        error_message TEXT,
-        created_at TEXT NOT NULL,
-        started_at TEXT,
-        finished_at TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS audit_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER REFERENCES users(id),
-        account_id INTEGER REFERENCES scienceing_accounts(id),
-        lease_id INTEGER REFERENCES leases(id),
-        action TEXT NOT NULL,
-        result TEXT NOT NULL,
-        ip TEXT,
-        user_agent TEXT,
-        metadata TEXT,
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS system_settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_leases_one_active_account
-        ON leases(account_id) WHERE status = 'ACTIVE';
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_leases_one_active_user
-        ON leases(user_id) WHERE status = 'ACTIVE';
-
-      CREATE INDEX IF NOT EXISTS idx_leases_account ON leases(account_id);
-      CREATE INDEX IF NOT EXISTS idx_leases_user ON leases(user_id);
-      CREATE INDEX IF NOT EXISTS idx_reset_jobs_status ON reset_jobs(status);
-      CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
-    `,
-  },
-  {
-    version: 2,
-    name: 'add_sessions',
-    sql: `
-      CREATE TABLE IF NOT EXISTS sessions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        token_hash TEXT NOT NULL UNIQUE,
-        user_id INTEGER NOT NULL REFERENCES users(id),
-        created_at TEXT NOT NULL,
-        expires_at TEXT NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
-    `,
-  },
-  {
-    version: 3,
-    name: 'settings_inactivity_minutes',
-    // 无操作超时配置单位 秒→分钟（2026-09-03）：旧键 inactivity_timeout_seconds 的值按
-    // 60s 取整换算成分钟写入新键 inactivity_timeout_minutes，随后清理旧键。
-    // 小于 1 分钟的旧值（<60s）统一置 1 分钟，非法值直接删除（运行时回退默认 30 分钟）。
-    sql: `
-      UPDATE system_settings
-      SET key = 'inactivity_timeout_minutes',
-          value = CAST(MAX(1, ROUND(CAST(value AS REAL) / 60.0)) AS INTEGER)
-      WHERE key = 'inactivity_timeout_seconds' AND CAST(value AS REAL) > 0;
-
-      DELETE FROM system_settings WHERE key = 'inactivity_timeout_seconds';
-    `,
-  },
-  {
-    version: 4,
-    name: 'add_manuals',
-    // 使用手册（t13）：按 slug 存放 Markdown 长文本，游客可读、管理员可编辑。
-    // 独立于 system_settings，避免把大段文本灌进「系统参数」的全量读写里。
-    sql: `
-      CREATE TABLE IF NOT EXISTS manuals (
-        slug TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        content TEXT NOT NULL,
-        updated_by INTEGER REFERENCES users(id),
-        updated_at TEXT NOT NULL
-      );
-    `,
-  },
-  {
-    version: 5,
-    name: 'add_first_login_flag',
-    // 首次登录强制改密（t14）：
-    //   first_login_at       首次成功登录时间（NULL = 从未登录），登录时惰性写入；
-    //   must_change_password 1 = 本次登录须先修改初始/临时密码（管理员新建/重置后置 1，
-    //                          用户本人改密成功后清 0；未清除前业务接口一律被 AuthGuard 拒绝）。
-    // 存量用户默认 0：不强制既有账号补改，避免升级后全员被锁在改密弹窗前。
-    sql: `
-      ALTER TABLE users ADD COLUMN first_login_at TEXT;
-      ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0;
-    `,
-  },
-  {
-    version: 6,
-    name: 'add_extension_claim_proofs',
-    // 扩展领取证明：由 chrome-extension:// Origin 申领，30 秒内一次性消费；
-    // 防止看板或普通网页仅伪造 extensionVersion 就绕过扩展门槛。
-    sql: `
-      CREATE TABLE extension_claim_proofs (
-        token_hash TEXT PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id),
-        extension_id TEXT NOT NULL,
-        extension_version TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        expires_at TEXT NOT NULL,
-        consumed_at TEXT
-      );
-
-      CREATE INDEX idx_extension_claim_proofs_expiry ON extension_claim_proofs(expires_at);
-    `,
-  },
-  {
-    version: 7,
-    name: 'settings_lease_rule_hours',
-    // 三条租约规则统一改为小时。已有显式小时值优先保留；旧默认值升级为新的
-    // 24/2/1 默认值，自定义分钟/秒值向上取整，避免迁移后实际时长被缩短或变成 0。
-    sql: `
-      INSERT OR IGNORE INTO system_settings (key, value)
-      SELECT 'inactivity_timeout_hours',
-             CASE
-               WHEN TRIM(value) = '30' THEN '24'
-               WHEN CAST(value AS INTEGER) > 0
-                 THEN CAST(MAX(1, (CAST(value AS INTEGER) + 59) / 60) AS INTEGER)
-               ELSE '24'
-             END
-        FROM system_settings
-       WHERE key = 'inactivity_timeout_minutes';
-
-      INSERT OR IGNORE INTO system_settings (key, value)
-      SELECT 'warning_hours',
-             CASE
-               WHEN TRIM(value) = '300' THEN '2'
-               WHEN CAST(value AS INTEGER) > 0
-                 THEN CAST(MAX(1, (CAST(value AS INTEGER) + 3599) / 3600) AS INTEGER)
-               ELSE '2'
-             END
-        FROM system_settings
-       WHERE key = 'warning_seconds';
-
-      INSERT OR IGNORE INTO system_settings (key, value)
-      SELECT 'critical_warning_hours',
-             CASE
-               WHEN TRIM(value) = '60' THEN '1'
-               WHEN CAST(value AS INTEGER) > 0
-                 THEN CAST(MAX(1, (CAST(value AS INTEGER) + 3599) / 3600) AS INTEGER)
-               ELSE '1'
-             END
-        FROM system_settings
-       WHERE key = 'critical_warning_seconds';
-
-      INSERT OR IGNORE INTO system_settings (key, value) VALUES
-        ('inactivity_timeout_hours', '24'),
-        ('warning_hours', '2'),
-        ('critical_warning_hours', '1');
-
-      DELETE FROM system_settings
-       WHERE key IN ('inactivity_timeout_minutes', 'warning_seconds', 'critical_warning_seconds');
-    `,
-  },
+export const MIGRATIONS: readonly Migration[] = [
+  migration001,
+  migration002,
+  migration003,
+  migration004,
+  migration005,
+  migration006,
+  migration007,
 ];
+
+export const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;

@@ -2,6 +2,9 @@ packages:
   - 'apps/*'
   - 'packages/*'
   - 'playwright/*'
+
+# Release 使用 pnpm 标准 deploy：工作区依赖注入为实体文件，并严格复用共享 lockfile。
+injectWorkspacePackages: true
 # pnpm 11：构建设置移入 pnpm-workspace.yaml（package.json 的 pnpm 字段已废弃）
 # esbuild 二进制由 @esbuild/win32-x64 等 optionalDependencies 提供，
 # 其 postinstall（node install.js）在受限沙箱中 spawn 子进程会被 EPERM 拦截，

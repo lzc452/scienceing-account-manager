@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* global console, process */
 /**
  * deploy.mjs —— 内网生产部署主 CLI（首次部署 / 更新 / 启停 / 状态 / 扩展打包）
  *
@@ -7,7 +8,7 @@
  *
  * 子命令：
  *   deploy            首次/全量部署：构建 server+web+worker → 迁移/种子 → 起后端 → 起网关 → 打扩展zip
- *   update            更新：同 deploy（建议先手动 git pull；也可 --pull 自动拉取）
+ *   update            旧源码目录更新：同 deploy；--pull 已禁用，正式发布使用 Release 脚本
  *   start             快速启动（跳过构建，仅用已有产物；未构建过会报错提示先 deploy）
  *   stop              停止后端与网关
  *   status            状态自检：进程/端口/健康/局域网访问地址
@@ -22,18 +23,17 @@ import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync, openSync, rmSync, mkdirSync, mkdtempSync, copyFileSync, cpSync, readdirSync, writeFileSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
-  log, die, section, sleep, run, mergedEnv, readEnvFile, findNodeBin, loadConfig,
+  log, die, section, sleep, run, productionEnv, readEnvFile, findNodeBin, loadConfig,
   detectLanIp, httpGet, waitPort, isPortFree, pidOnPort, processCmdline, killPid, processAlive,
   writeJson, readJson, findNginxExe, psJson, dirFilesRecursive, writeZip,
   REPO_ROOT, APP_SERVER, APP_WEB, APP_EXTENSION, WORKER_DIR, WEB_DIST, RUN_DIR, DIST_DIR, ENV_FILE,
+  DB_FILE, BACKUP_DIR, NGINX_PREFIX, RUNTIME_ROOT,
   EXT_LAN_DIR, WEB_DOWNLOADS_DIR, EXT_PACKAGE_ZIP, EXT_PACKAGE_JSON,
   BACKEND_DEFAULT_PORT, GATEWAY_DEFAULT_PORT,
 } from './lib.mjs';
-import {
-  ensureNginxPrefix, nginxTest, nginxStart, nginxStop, nginxVersion,
-} from './nginx-ctl.mjs';
+import { ensureNginxPrefix, nginxTest, nginxStart, nginxVersion } from './nginx-ctl.mjs';
 
 // ───────────────────────── 运行时解析 ─────────────────────────
 
@@ -113,7 +113,7 @@ async function startBackend({ nodeBin, backendPort }) {
   section('启动生产后端');
   const distMain = join(APP_SERVER, 'dist', 'main.js');
   if (!existsSync(distMain)) die(`后端未构建：${distMain}（请先执行 deploy/build）`);
-  const env = mergedEnv({ NODE_ENV: 'production' });
+  const env = productionEnv();
   const logFd = openSync(BACKEND_LOG, 'a');
   const child = spawn(nodeBin, [distMain], {
     cwd: APP_SERVER, env, detached: true, windowsHide: true, stdio: ['ignore', logFd, logFd],
@@ -164,7 +164,7 @@ async function stopGateway({ gatewayPort, nginxExe, force = false }) {
     if (isOurNginx || /nginx\.exe/i.test(cmd || '') || force) {
       log(`停止网关端口 ${gatewayPort} 占用进程（pid ${owner}，${isOurNginx ? '本项目 nginx' : 'nginx/force'}）…`);
       if (nginxExe && /nginx\.exe/i.test(cmd || '')) {
-        spawnSync(nginxExe, ['-s', 'quit', '-p', join(REPO_ROOT, 'deploy-lan', 'nginx-prefix'), '-c', join(REPO_ROOT, 'deploy-lan', 'nginx-prefix', 'conf', 'nginx.conf')], { encoding: 'utf8', timeout: 8000, windowsHide: true });
+        spawnSync(nginxExe, ['-s', 'quit', '-p', NGINX_PREFIX, '-c', join(NGINX_PREFIX, 'conf', 'nginx.conf')], { encoding: 'utf8', timeout: 8000, windowsHide: true });
         await sleep(1200);
       }
       const still = await pidOnPort(gatewayPort);
@@ -189,7 +189,7 @@ async function psList(body) {
   return Array.isArray(out) ? out : [out];
 }
 
-async function startGateway({ nodeBin, cfg, gatewayPort, backendPort, lanIp }) {
+async function startGateway({ nodeBin, cfg, gatewayPort, backendPort }) {
   section('启动生产网关（静态 + /api 反代）');
   if (!existsSync(join(WEB_DIST, 'index.html'))) die(`前端未构建：${join(WEB_DIST, 'index.html')}（请先 deploy/build）`);
   await stopGateway({ gatewayPort, nginxExe: cfg.NGINX_EXE });
@@ -227,7 +227,7 @@ async function startGateway({ nodeBin, cfg, gatewayPort, backendPort, lanIp }) {
       '--api', `http://127.0.0.1:${backendPort}`,
       '--port', String(gatewayPort),
       '--log', NODE_GATEWAY_LOG,
-    ], { cwd: REPO_ROOT, env: mergedEnv(), detached: true, windowsHide: true, stdio: ['ignore', logFd, logFd] });
+    ], { cwd: REPO_ROOT, env: productionEnv(), detached: true, windowsHide: true, stdio: ['ignore', logFd, logFd] });
     child.unref();
     writeJson(NODE_GATEWAY_PID, { pid: child.pid, startedAt: new Date().toISOString() });
     if (!(await waitPort(gatewayPort, 10_000))) die(`node 网关未在 ${gatewayPort} 监听`);
@@ -283,7 +283,7 @@ function syncDir(src, dst) {
 // （与根目录 pnpm 工作区无关，避免 workspace 解析干扰）。
 const WEB_THIRD_PARTY_DEPS = ['markdown-it', 'dompurify', 'echarts'];
 
-function ensureWebDeps({ nodeBin }) {
+function ensureWebDeps() {
   const webNm = join(APP_WEB, 'node_modules');
   const missing = WEB_THIRD_PARTY_DEPS.filter((name) => !existsSync(join(webNm, name, 'package.json')));
   if (missing.length === 0) return;
@@ -321,10 +321,10 @@ function ensureWebDeps({ nodeBin }) {
 
 async function buildWeb({ nodeBin }) {
   section('构建前端（vite build）');
-  ensureWebDeps({ nodeBin });
+  ensureWebDeps();
   const vite = join(APP_WEB, 'node_modules', 'vite', 'bin', 'vite.js');
   if (!existsSync(vite)) die(`vite 不存在：${vite}（请先安装依赖 node_modules）`);
-  const env = mergedEnv({ VITE_USE_MOCK: 'false', NODE_ENV: 'production' });
+  const env = productionEnv({ VITE_USE_MOCK: 'false' });
   // 先构建到暂存目录再同步到 dist：
   // 让 vite 直接覆盖 dist 时，Windows 上会随机对个别产物（字体/入口 chunk）
   // 抛 EPERM（文件被占用），中断的构建会把 index-*.js 写成 0 字节 → 整站白屏。
@@ -366,20 +366,20 @@ async function buildWorker({ nodeBin }) {
   await run(nodeBin, [tsc, '-p', join(WORKER_DIR, 'tsconfig.json')], { cwd: REPO_ROOT });
 }
 
-async function setupDatabase({ nodeBin }) {
-  section('数据库迁移与种子（幂等）');
-  mkdirSync(join(REPO_ROOT, 'data'), { recursive: true });
-  const env = mergedEnv();
+async function setupDatabase({ nodeBin, seed = false }) {
+  section(seed ? '数据库迁移与首次初始化种子' : '数据库迁移');
+  mkdirSync(dirname(DB_FILE), { recursive: true });
+  const env = productionEnv();
   await run(nodeBin, [join(APP_SERVER, 'dist', 'db', 'migrate.js')], { cwd: APP_SERVER, env });
-  await run(nodeBin, [join(APP_SERVER, 'dist', 'db', 'seed.js')], { cwd: APP_SERVER, env });
-  log('数据库迁移/种子完成');
+  if (seed) await run(nodeBin, [join(APP_SERVER, 'dist', 'db', 'seed.js')], { cwd: APP_SERVER, env });
+  log(seed ? '数据库迁移/首次种子完成' : '数据库迁移完成');
 }
 
 // ───────────────────────── 扩展打包（LAN 版） ─────────────────────────
 
 /** 删除失败仅告警（某些受限环境禁删除，不影响覆盖式打包逻辑）。 */
 function tryRm(p) {
-  try { rmSync(p, { recursive: true, force: true }); } catch (e) { log(`⚠ 清理失败（可忽略）：${p}`); }
+  try { rmSync(p, { recursive: true, force: true }); } catch { log(`⚠ 清理失败（可忽略）：${p}`); }
 }
 
 function cpTree(src, dst, exclude = []) {
@@ -393,7 +393,7 @@ function cpTree(src, dst, exclude = []) {
   }
 }
 
-function patchExtensionForLan(extDir, lanOrigin, apiOrigin, gatewayPort) {
+function patchExtensionForLan(extDir, lanOrigin, apiOrigin) {
   // 1) manifest.json：解析 → 追加 LAN origin → 回写（保持键序）
   const manifestPath = join(extDir, 'manifest.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
@@ -431,7 +431,7 @@ async function packLanExtension({ cfg, gatewayPort, lanIp, nodeBin }) {
   const srcFiles = dirFilesRecursive(APP_EXTENSION);
   cpTree(APP_EXTENSION, EXT_LAN_DIR, []);
   const lanOrigin = `http://${lanIp}:${gatewayPort}`;
-  patchExtensionForLan(EXT_LAN_DIR, lanOrigin, lanOrigin, gatewayPort);
+  patchExtensionForLan(EXT_LAN_DIR, lanOrigin, lanOrigin);
   // 结构校验（基于副本运行，校验副本自身）
   const validator = join(EXT_LAN_DIR, 'scripts', 'validate.mjs');
   const r = spawnSync(nodeBin, [validator], { encoding: 'utf8', timeout: 20_000, cwd: EXT_LAN_DIR, windowsHide: true });
@@ -560,14 +560,13 @@ async function cmdStatus() {
   } else {
     console.log('  网关  未运行');
   }
-  const adminPwd = readEnvFile(ENV_FILE).ADMIN_INITIAL_PASSWORD;
-  console.log(`  管理员账号 admin / ${adminPwd || '（见仓库 .env ADMIN_INITIAL_PASSWORD）'}（首次登录后请修改）`);
+  console.log('  管理员账号 admin（口令仅保存在生产 .env，不在状态输出中显示）');
   console.log('═'.repeat(60));
 }
 
 // ───────────────────────── 子命令实现 ─────────────────────────
 
-async function fullDeploy({ nodeBin, cfg, backendPort, gatewayPort, lan }) {
+async function fullDeploy({ nodeBin, cfg, backendPort, gatewayPort, lan, initialize = false }) {
   const startedAt = Date.now();
   log('');
   log(`部署目标：看板 http://${lan.ip}:${gatewayPort}/   API http://${lan.ip}:${backendPort}/api`);
@@ -581,8 +580,16 @@ async function fullDeploy({ nodeBin, cfg, backendPort, gatewayPort, lan }) {
   await buildServer({ nodeBin });
   await buildWorker({ nodeBin });
 
-  // 2) 数据库
-  await setupDatabase({ nodeBin });
+  // 2) 数据库：已有库先强制快照；新库必须显式 --initialize。
+  if (existsSync(DB_FILE)) {
+    await run(nodeBin, [
+      join(APP_SERVER, 'dist', 'db', 'maintenance.js'),
+      'backup', '--directory', BACKUP_DIR, '--reason', 'predeploy-source',
+    ], { cwd: APP_SERVER, env: productionEnv() });
+  } else if (!initialize) {
+    die(`生产数据库不存在：${DB_FILE}。首次空库部署须加 --initialize；旧库迁移请使用根目录 deploy-release.ps1 -LegacyDatabasePath。`);
+  }
+  await setupDatabase({ nodeBin, seed: initialize });
 
   // 3) 前端
   await buildWeb({ nodeBin });
@@ -615,20 +622,18 @@ async function fullDeploy({ nodeBin, cfg, backendPort, gatewayPort, lan }) {
 
 async function cmdDeploy(argv) {
   const rt = await resolveRuntime();
-  await fullDeploy({ ...rt, force: argv.includes('--force') });
+  await fullDeploy({ ...rt, force: argv.includes('--force'), initialize: argv.includes('--initialize') });
 }
 
 async function cmdUpdate(argv) {
   const rt = await resolveRuntime();
   if (argv.includes('--pull')) {
-    section('git pull');
-    try { await run('git', ['pull', '--ff-only'], { cwd: REPO_ROOT }); }
-    catch (e) { log(`⚠ git pull 失败（继续部署）：${e.message}`); }
+    die('生产机禁止直接 git pull。请先运行根目录 sync-from-dev.ps1，再运行 deploy-release.ps1。');
   }
-  await fullDeploy({ ...rt, force: argv.includes('--force') });
+  await fullDeploy({ ...rt, force: argv.includes('--force'), initialize: false });
 }
 
-async function cmdStart(argv) {
+async function cmdStart() {
   const rt = await resolveRuntime();
   const { nodeBin, cfg, backendPort, gatewayPort, lan } = rt;
   const need = [
@@ -656,18 +661,48 @@ async function cmdStop(argv) {
   log('已停止后端与网关。');
 }
 
-async function cmdBuild(argv) {
+async function cmdBuild() {
   const rt = await resolveRuntime();
   const { nodeBin, cfg, gatewayPort, lan } = rt;
   await buildServer({ nodeBin });
   await buildWorker({ nodeBin });
-  await setupDatabase({ nodeBin });
   await buildWeb({ nodeBin });
   await packLanExtension({ cfg, gatewayPort, lanIp: lan.ip, nodeBin });
   log('build 完成（未启动服务，可执行 start）。');
 }
 
-async function cmdNginxTest(argv) {
+async function runDatabaseCli(scriptName, argv) {
+  const rt = await resolveRuntime();
+  const script = join(APP_SERVER, 'dist', 'db', scriptName);
+  if (!existsSync(script)) die(`数据库工具不存在：${script}`);
+  await run(rt.nodeBin, [script, ...argv], { cwd: APP_SERVER, env: productionEnv() });
+}
+
+async function cmdDbMigrate() {
+  await runDatabaseCli('migrate.js', []);
+}
+
+async function cmdDbSeed() {
+  await runDatabaseCli('seed.js', []);
+}
+
+async function cmdDbBackup(argv) {
+  await runDatabaseCli('maintenance.js', ['backup', '--directory', BACKUP_DIR, ...argv]);
+}
+
+async function cmdDbImport(argv) {
+  await runDatabaseCli('maintenance.js', ['import', '--target', DB_FILE, ...argv]);
+}
+
+async function cmdDbRestore(argv) {
+  await runDatabaseCli('maintenance.js', ['restore', '--target', DB_FILE, ...argv]);
+}
+
+async function cmdDbVerify() {
+  await runDatabaseCli('verify.js', []);
+}
+
+async function cmdNginxTest() {
   const rt = await resolveRuntime();
   const { cfg, gatewayPort, backendPort } = rt;
   const { findNginxExe } = await import('./lib.mjs');
@@ -681,7 +716,7 @@ async function cmdNginxTest(argv) {
   process.exit(t.ok ? 0 : 1);
 }
 
-async function cmdPackExt(argv) {
+async function cmdPackExt() {
   const rt = await resolveRuntime();
   const zip = await packLanExtension({ cfg: rt.cfg, gatewayPort: rt.gatewayPort, lanIp: rt.lan.ip, nodeBin: rt.nodeBin });
   if (!zip) die('未生成 zip（检查 PACK_LAN_EXTENSION / LAN_IP）');
@@ -689,9 +724,9 @@ async function cmdPackExt(argv) {
   console.log(`下载入口: ${zip.downloadUrl}`);
 }
 
-async function cmdResetAdmin(argv) {
+async function cmdResetAdmin() {
   const rt = await resolveRuntime();
-  const env = mergedEnv();
+  const env = productionEnv();
   const pwd = env.ADMIN_INITIAL_PASSWORD || 'admin12345';
   const script = `
     const { openDatabase } = require('${join(APP_SERVER, 'dist', 'db', 'connection.js').replace(/\\/g, '/')}');
@@ -730,8 +765,8 @@ async function cmdEnvInit() {
     PORT: String(BACKEND_DEFAULT_PORT),
     ADMIN_INITIAL_PASSWORD: 'admin12345',
     SCIENCING_ADMIN_URL: 'https://www.scienceing.com/account/management/list',
-    SCIENCING_STORAGE_STATE: join(REPO_ROOT, 'playwright', '.auth', 'admin.json'),
-    SCIENCING_WORKER_CLI: 'playwright/worker/dist/cli.js',
+    SCIENCING_STORAGE_STATE: join(RUNTIME_ROOT, 'playwright', '.auth', 'admin.json'),
+    SCIENCING_WORKER_CLI: join(WORKER_DIR, 'dist', 'cli.js'),
   };
   const created = [];
   for (const [k, v] of Object.entries(defaults)) {
@@ -751,7 +786,7 @@ async function cmdEnvInit() {
   writeFileSync(ENV_FILE, lines.filter((_, i, a) => !(i < a.length - 1 && a[i] === '' && a[i + 1] === '')).join('\n').replace(/\n+$/, '\n'), 'utf8');
   console.log(`[env:init] ${created.length > 0 ? `已新增/补全：${created.join(', ')}` : '环境变量已齐全，未改动任何值'}`);
   console.log(`[env:init] 文件：${ENV_FILE}`);
-  if (created.includes('SCIENCEING_MASTER_KEY')) console.log('[env:init] ⚠ 本次生成了新的 SCIENCEING_MASTER_KEY —— 若此前已 seed 过数据库，必须“停服→删 data/scienceing.db*→重新 deploy”，否则旧密文解不开。');
+  if (created.includes('SCIENCEING_MASTER_KEY')) console.log('[env:init] ⚠ 本次生成了新的 SCIENCEING_MASTER_KEY。已有生产库时必须恢复其原 master key，禁止删库或覆盖密文。');
   if (missingSecrets.length > 0) console.log(`[env:init] ⚠ 请手动填写 ${missingSecrets.join(' / ')}（科应后台管理员凭据）后重新部署。`);
   console.log('[env:init] 修改完成后：node deploy-lan/scripts/deploy.mjs deploy（或双击 deploy-update.bat）');
 }
@@ -779,6 +814,12 @@ const SUB = {
   build: cmdBuild,
   'nginx:test': cmdNginxTest,
   'extension:pack': cmdPackExt,
+  'db:migrate': cmdDbMigrate,
+  'db:seed': cmdDbSeed,
+  'db:backup': cmdDbBackup,
+  'db:import': cmdDbImport,
+  'db:restore': cmdDbRestore,
+  'db:verify': cmdDbVerify,
   'db:reset-admin': cmdResetAdmin,
   'env:print': cmdEnvPrint,
   'env:init': cmdEnvInit,

@@ -45,7 +45,7 @@ function generateAdminPassword(): string {
  * 密文不可读通常意味着 SCIENCEING_MASTER_KEY 配置错误。此时必须失败退出并保留原始
  * 密文，不能用占位密码“修复”，否则恢复正确密钥后也无法找回真实密码。
  */
-function assertPasswordsReadable(db: DatabaseSync, masterKey: Buffer): void {
+export function assertPasswordsReadable(db: DatabaseSync, masterKey: Buffer): void {
   const rows = db
     .prepare('SELECT id, code, current_password_ciphertext FROM scienceing_accounts')
     .all() as Array<{ id: number; code: string; current_password_ciphertext: string | null }>;

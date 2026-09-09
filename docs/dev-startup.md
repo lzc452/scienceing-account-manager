@@ -12,7 +12,7 @@
 pnpm dev                 # 全量：装依赖 → 建库 → 种子 → 后端(:3000) + 前端(:5173)
 pnpm dev --only=server   # 只启动后端（数据库/编译一并完成）
 pnpm dev --only=web      # 只启动前端（需后端已在运行）
-pnpm dev --reset         # 删除 data/scienceing.db 后重建（迁移 + 种子）
+pnpm dev --reset         # 删除 data/scienceing.dev.db 后重建（迁移 + 种子）
 pnpm dev --rebuild       # 强制重新编译后端
 pnpm dev --reset-admin  # 把 admin 口令强制重置为 .env 中的 ADMIN_INITIAL_PASSWORD
 pnpm dev --no-install    # 跳过依赖安装（node_modules 已就绪时更快）
