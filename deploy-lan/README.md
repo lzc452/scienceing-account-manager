@@ -22,4 +22,4 @@ start / stop / status / extension:pack
 db:migrate / db:seed / db:backup / db:import / db:restore / db:verify / db:doctor
 ```
 
-设置 `SCIENCEING_RUNTIME_DIR=D:\Applications\scienceing-account-manager-app` 后，`.env`、`config.env`、`run`、`backups` 与 `data\scienceing.prod.db` 均位于稳定安装根目录；代码则从独立的 `releases\vX.Y.Z` 目录运行。
+设置安装根（默认 `D:\scienceing-prod`）后，`.env`、`config.env`、`run`、`backups` 与 `data\scienceing.prod.db` 均位于稳定安装根目录；代码则从独立的 `releases\vX.Y.Z` 目录运行。标准目录结构与首次部署教程见 [docs/production-layout.md](docs/production-layout.md)。

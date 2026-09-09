@@ -1,7 +1,7 @@
 ﻿[CmdletBinding()]
 param(
     [string]$Tag = 'latest',
-    [string]$InstallRoot = 'D:\Applications\scienceing-account-manager-app',
+    [string]$InstallRoot = 'D:\scienceing-prod',
     [string]$LegacyDatabasePath,
     [switch]$Initialize,
     [switch]$SkipSync,
@@ -13,7 +13,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'deploy-lan\scripts\release-common.ps1')
 
-if ($Tag -notmatch '^v\d+\.\d+\.\d+$') { throw "正式版本 Tag 必须符合 vX.Y.Z：$Tag" }
+# 注意：Tag 格式校验放在下面 try 块内（latest 解析之后），这里不能提前校验，
+# 否则 deploy-prod.bat 默认传的 -Tag latest 会被当成非法版本直接拒绝。
 $InstallRoot = [System.IO.Path]::GetFullPath($InstallRoot)
 Initialize-ProductionLayout -InstallRoot $InstallRoot
 $node = Get-ReleaseNode
@@ -29,6 +30,62 @@ $previousRelease = $null
 $legacyRoot = $null
 $databaseMayHaveChanged = $false
 $serviceWasStopped = $false
+
+# 首次部署时自动寻找旧生产库：把旧库放到 InstallRoot\legacy\ 或 InstallRoot\data\
+# 或 InstallRoot\ 根目录即可，无需再显式传 -LegacyDatabasePath。
+function Resolve-LegacyDatabase {
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+
+    $candidates = @(
+        (Join-Path $InstallRoot 'legacy\scienceing.db'),
+        (Join-Path $InstallRoot 'legacy\scienceing.prod.db'),
+        (Join-Path $InstallRoot 'data\scienceing.db'),
+        (Join-Path $InstallRoot 'scienceing.db')
+    )
+    foreach ($candidate in $candidates) {
+        if ((Test-Path -LiteralPath $candidate) -and ((Get-Item -LiteralPath $candidate).Length -gt 0)) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
+# 首次部署（没有上一版本可停）时，旧实例可能仍占着 3000/18080：
+# 属于本项目的进程自动停掉，无关进程直接报错，避免"部署显示成功但跑的还是旧代码"。
+function Stop-StaleServicePorts {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $backendPort = 3000
+    $gatewayPort = 18080
+    $envFile = Join-Path $Root '.env'
+    if (Test-Path -LiteralPath $envFile) {
+        $m = [regex]::Match((Get-Content -LiteralPath $envFile -Raw), '(?m)^\s*PORT\s*=\s*(\d+)')
+        if ($m.Success) { $backendPort = [int]$m.Groups[1].Value }
+    }
+    $cfgFile = Join-Path $Root 'config.env'
+    if (Test-Path -LiteralPath $cfgFile) {
+        $m = [regex]::Match((Get-Content -LiteralPath $cfgFile -Raw), '(?m)^\s*GATEWAY_PORT\s*=\s*(\d+)')
+        if ($m.Success) { $gatewayPort = [int]$m.Groups[1].Value }
+    }
+
+    foreach ($port in @($backendPort, $gatewayPort)) {
+        $connections = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+        if ($connections.Count -eq 0) { continue }
+        foreach ($ownerPid in ($connections | Select-Object -ExpandProperty OwningProcess -Unique)) {
+            $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$ownerPid" -ErrorAction SilentlyContinue
+            $commandLine = if ($proc) { [string]$proc.CommandLine } else { '' }
+            if (-not $commandLine) { continue }
+            if ($commandLine -match 'scienceing|apps[\\/]server|dist[\\/]main\.js|gateway\.mjs|nginx-prefix') {
+                Write-Host "[deploy] 端口 $port 被旧实例占用（pid $ownerPid），自动停止…"
+                Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 2
+            }
+            else {
+                throw "端口 $port 被无关进程占用（pid $ownerPid）：$commandLine。请释放端口后重试。"
+            }
+        }
+    }
+}
 
 function Invoke-ReleaseCommand {
     param(
@@ -93,7 +150,13 @@ function Invoke-LegacyCommand {
     }
 }
 
-$gitAvailable = [bool](Get-Command git -ErrorAction SilentlyContinue)
+# git 是否可用 = 装了 git 且 $PSScriptRoot 是 git 工作区。
+# 在 Release 解压目录（非仓库）运行时自动进入纯 SMB 部署模式，不再要求 -SkipSync。
+$gitAvailable = $false
+if (Get-Command git -ErrorAction SilentlyContinue) {
+    $insideWorkTree = (& git -C $PSScriptRoot rev-parse --is-inside-work-tree 2>$null | Out-String).Trim()
+    $gitAvailable = ($insideWorkTree -eq 'true')
+}
 $transcriptStarted = $false
 try {
     $lock = New-Object System.IO.FileStream(
@@ -127,7 +190,7 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'sync-from-dev.ps1 执行失败。' }
         }
         else {
-            Write-Warning '未检测到 git：跳过仓库同步，直接使用共享目录中的 Release（生产机纯部署模式）。'
+            Write-Warning '当前目录不是 git 工作区（或未装 git）：跳过仓库同步，直接使用共享目录中的 Release（生产机纯部署模式）。'
             $SkipSync = $true
         }
     }
@@ -246,14 +309,24 @@ try {
         $serviceWasStopped = $true
         Invoke-LegacyCommand -Command 'stop'
     }
+    else {
+        # 首次部署（无上一版本指针）：旧实例可能还占着 3000/18080，自动清理
+        Stop-StaleServicePorts -Root $InstallRoot
+    }
 
     if (-not (Test-Path -LiteralPath $databasePath)) {
+        if (-not $LegacyDatabasePath) {
+            $LegacyDatabasePath = Resolve-LegacyDatabase -InstallRoot $InstallRoot
+            if ($LegacyDatabasePath) {
+                Write-Host "[deploy] 自动发现旧生产库：$LegacyDatabasePath"
+            }
+        }
         if ($LegacyDatabasePath) {
             [void](Invoke-Maintenance -ReleaseRoot $targetRelease -Arguments @('import', '--source', $LegacyDatabasePath, '--target', $databasePath))
             $databaseMayHaveChanged = $true
         }
         elseif (-not $Initialize) {
-            throw '生产数据库不存在。请提供 -LegacyDatabasePath 导入旧库，或显式使用 -Initialize 创建全新空环境。'
+            throw '生产数据库不存在，也未发现旧库。请把旧 scienceing.db（连同 -wal/-shm）放到 InstallRoot\legacy\，或用 -LegacyDatabasePath 指定，或显式 -Initialize 创建全新空环境。'
         }
     }
 

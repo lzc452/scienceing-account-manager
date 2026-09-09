@@ -1,6 +1,6 @@
 # 开发机 → 生产机发布
 
-生产机只从开发机 LAN Git/SMB 获取 Tag 与 Release，不访问 GitHub，也不需要 pnpm/npm。开发库固定为 `data/scienceing.dev.db`；生产库固定为 `D:\Applications\scienceing-account-manager-app\data\scienceing.prod.db`，两者禁止复制或复用。
+生产机只从开发机 LAN Git/SMB 获取 Tag 与 Release，不访问 GitHub，也不需要 pnpm/npm。开发库固定为 `data/scienceing.dev.db`；生产安装根默认 `D:\scienceing-prod`（`-InstallRoot` 可覆盖），生产库固定为 `<InstallRoot>\data\scienceing.prod.db`，两者禁止复制或复用。标准目录结构与首次切换旧库的完整教程见 [deploy-lan/docs/production-layout.md](deploy-lan/docs/production-layout.md)。
 
 ## 1. 开发机发版
 
@@ -68,18 +68,19 @@ powershell -ExecutionPolicy Bypass -File .\deploy-release.ps1 -Tag v1.2.3   # �
 .\deploy-release.ps1 -Tag v1.2.4
 ```
 
-生产目录：
+生产目录（默认 `D:\scienceing-prod`，`-InstallRoot` 可覆盖）：
 
 ```text
-D:\Applications\scienceing-account-manager-app\
-  .env                    # 稳定生产配置，不进 Release
-  config.env              # LAN/网关配置
+D:\scienceing-prod\
+  .env                    # 稳定生产配置，不进 Release（首次从旧项目复制）
+  config.env              # LAN/网关配置（缺失时自动从 Release 补）
+  legacy\                 # 首次部署放旧 scienceing.db（自动探测导入）
   current.json            # 当前版本指针
   packages\               # 下载的 ZIP/SHA256
   releases\vX.Y.Z\        # 每个版本独立目录
   data\scienceing.prod.db # 唯一生产主库
   backups\                # SQLite 一致性快照
-  run\                    # PID 与日志
+  run\                    # PID 与部署日志
   nginx-prefix\
   extension-lan\
 ```
