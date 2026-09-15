@@ -20,10 +20,15 @@ const PASSWORD_CHANGE_ALLOWED: ReadonlyArray<readonly [string, string]> = [
   ['POST', '/auth/logout'],
 ];
 
-/** 归一化请求路径：去掉全局前缀 /api（e2e 与生产 main.ts 均挂 /api，双兼容）。 */
+/**
+ * 归一化请求路径：去掉全局前缀 /api（e2e 与生产 main.ts 均挂 /api，双兼容）。
+ *
+ * 前缀判定必须带斜杠。此前用 `startsWith('/api')`，于是 `/apifoo` 会被切成 `foo`——
+ * 一个与 `/api` 命名空间无关的路径被映射进了业务路径空间，放行判定因此产生歧义。
+ */
 function normalizedPath(request: Request): string {
   const raw = request.path || (request.url ?? '').split('?')[0] || '';
-  return raw.startsWith('/api') ? raw.slice(4) || raw : raw;
+  return raw.startsWith('/api/') ? raw.slice(4) : raw;
 }
 
 @Injectable()

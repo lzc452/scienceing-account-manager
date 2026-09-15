@@ -28,14 +28,6 @@ export const RELEASE_REASON = {
   RESET_ERROR: 'RESET_ERROR',
 } as const;
 
-/** 密码重置任务状态（ResetJobStatus，PRD §39） */
-export const RESET_JOB_STATUS = {
-  PENDING: 'PENDING',
-  RUNNING: 'RUNNING',
-  SUCCESS: 'SUCCESS',
-  FAILED: 'FAILED',
-} as const;
-
 /** 用户角色（UserRole，PRD §4） */
 export const USER_ROLE = {
   USER: 'USER',
@@ -100,9 +92,12 @@ export const PLACEHOLDER_ACCOUNT_PASSWORD = '__PLACEHOLDER__';
 
 /**
  * 审计动作中文名（展示层映射，供 GET /admin/logs 输出 actionLabel）。
- * 与 AUDIT_ACTION 键一一对应；新增动作须在此补全，否则前端兜底显示英文。
+ *
+ * 类型刻意写成 `Record<keyof typeof AUDIT_ACTION, string>` 而非 `Record<string, string>`：
+ * 前者会在**新增 AUDIT_ACTION 却忘了补标签**时直接编译失败，后者只会静默漏译、
+ * 让前端兜底显示英文 —— 那正是此前需要靠人工同步、容易漏的地方。
  */
-export const AUDIT_ACTION_LABEL: Record<string, string> = {
+export const AUDIT_ACTION_LABEL: Record<keyof typeof AUDIT_ACTION, string> = {
   LOGIN: '登录',
   LOGOUT: '退出登录',
   USER_CREATE: '新增用户',

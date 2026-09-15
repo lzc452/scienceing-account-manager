@@ -150,6 +150,19 @@ export class AuthService {
     return toAuthUser(row);
   }
 
+  /**
+   * 清扫已过期会话（L2-15）。
+   *
+   * 会话过期当前只在 resolveUserByToken 里被按需拒绝，行本身会长期驻留并随登录次数累积。
+   * DELETE 是幂等的，多实例部署下重复执行也安全。
+   */
+  sweepExpiredSessions(): number {
+    const result = this.dbService.db
+      .prepare('DELETE FROM sessions WHERE expires_at <= ?')
+      .run(new Date().toISOString());
+    return Number(result.changes);
+  }
+
   logout(token: string, user: AuthUser, meta: LoginMeta = {}): void {
     this.dbService.db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(sha256Hex(token));
     this.audit.record({

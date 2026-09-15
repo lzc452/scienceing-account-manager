@@ -172,11 +172,18 @@ try {
     if ($reparsePoints) {
         throw "Release 含符号链接/重解析点，生产机无法独立运行：$($reparsePoints[0].FullName)"
     }
+    # 发布包的最后一道防线：**绝不能**把凭据/会话/密钥随包发出去。
+    # 这是 allowlist 思路的反面 —— 只能列举已知危险形态，所以宁可列多不可列少。
     $forbidden = Get-ChildItem -LiteralPath $bundleRoot -File -Recurse -Force | Where-Object {
         $relative = $_.FullName.Substring($bundleRoot.Length).TrimStart('\')
         $_.Name -match '^\.env($|\.)' -or
-        $_.Name -match '\.(db|db-wal|db-shm|db-journal|log|bak|backup|secret|pem|pfx|key)$' -or
-        $relative -match '(^|\\)(logs?|backups?|secrets?)(\\|$)'
+        $_.Name -match '^\.npmrc$' -or                              # 可能含 registry token / 私服凭据
+        $_.Name -match '^id_(rsa|dsa|ecdsa|ed25519)(\.|$)' -or       # SSH 私钥
+        $_.Name -match '\.(db|db-wal|db-shm|db-journal|log|bak|backup|secret|pem|pfx|p12|key)$' -or
+        $relative -match '(^|\\)(logs?|backups?|secrets?)(\\|$)' -or
+        # playwright/.auth 里是**已登录的管理员会话**（含 cookie/localStorage）：
+        # 随包发出等于把科应后台的登录态一并交出去。
+        $relative -match '(^|\\)\.auth(\\|$)'
     }
     if ($forbidden) { throw "Release 含禁止文件：$($forbidden[0].FullName)" }
 

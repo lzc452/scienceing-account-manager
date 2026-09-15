@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, hkdfSync, timingSafeEqual } from 'node:crypto';
 import { loadMasterKey } from './master-key';
 
 /**
@@ -30,6 +30,26 @@ export interface VerifyTokenResult {
   expiresAt: string;
 }
 
+/**
+ * 签名用途的 HKDF info 串 —— 域分离的标识。
+ * 改动它会使**所有已签发票据立即失效**（最长 5 分钟），属可接受的代价；
+ * 但不要为了「让某张票据继续有效」而改。
+ */
+const HMAC_INFO = 'scienceing:verify-token:hmac:v1';
+
+/**
+ * 从 master key 派生本用途专用的 HMAC 子密钥。
+ *
+ * 此前直接把 master key 当 HMAC key 用，有两个问题：
+ *  1. **密钥复用**：同一个密钥同时承担 AES-256-GCM 加密与 HMAC 签名，
+ *     任一用途的密钥材料暴露都会波及另一用途；
+ *  2. **无域分离**：不同用途之间没有边界，为 A 用途签发的 MAC 在 B 用途下同样成立。
+ * HKDF 以固定 info 派生独立子密钥，两个问题一并解决。
+ */
+function hmacKey(masterKey: Buffer): Buffer {
+  return Buffer.from(hkdfSync('sha256', masterKey, Buffer.alloc(0), HMAC_INFO, 32));
+}
+
 function sign(body: string, key: Buffer): Buffer {
   return createHmac('sha256', key).update(body).digest();
 }
@@ -41,7 +61,7 @@ export function signVerifyToken(
 ): VerifyTokenResult {
   const exp = Date.now() + TTL_MS;
   const body = `${purpose}:${userId}:${exp}`;
-  const sig = sign(body, loadMasterKey()).toString('base64url');
+  const sig = sign(body, hmacKey(loadMasterKey())).toString('base64url');
   return { token: `${body}.${sig}`, expiresAt: new Date(exp).toISOString() };
 }
 
@@ -65,7 +85,7 @@ export function verifyVerifyToken(
   const exp = Number(expStr);
   if (!Number.isFinite(exp) || exp <= Date.now()) return false;
 
-  const expected = sign(body, loadMasterKey());
+  const expected = sign(body, hmacKey(loadMasterKey()));
   let actual: Buffer;
   try {
     actual = Buffer.from(sig, 'base64url');

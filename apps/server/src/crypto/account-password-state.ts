@@ -1,4 +1,4 @@
-import { decryptSecret, parsePayload } from './secret-box';
+import { accountAad, decryptSecret, parsePayload } from './secret-box';
 import { loadMasterKey } from './master-key';
 import { PLACEHOLDER_ACCOUNT_PASSWORD } from '../db/constants';
 
@@ -11,10 +11,12 @@ import { PLACEHOLDER_ACCOUNT_PASSWORD } from '../db/constants';
  * 占位值必然登录失败——账号「能领用、一用就废」。
  * 只有经「重置密码」流程在科应后台改密成功后，密码才算真正配置（provisioned）。
  */
-export function isPasswordProvisioned(ciphertext: string | null | undefined): boolean {
+export function isPasswordProvisioned(accountId: number, ciphertext: string | null | undefined): boolean {
   if (!ciphertext) return false;
   try {
-    const plaintext = decryptSecret(parsePayload(ciphertext), loadMasterKey());
+    // v2 密文绑定账号 AAD，必须带上 accountId 才能解密；
+    // v1（迁移前）密文忽略该参数，因此迁移期间两种格式都能判读。
+    const plaintext = decryptSecret(parsePayload(ciphertext), loadMasterKey(), accountAad(accountId));
     return plaintext !== '' && plaintext !== PLACEHOLDER_ACCOUNT_PASSWORD;
   } catch {
     // 解密失败（密钥轮换 / 载荷损坏）一律按「未配置」处理：

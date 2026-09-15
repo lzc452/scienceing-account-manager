@@ -15,11 +15,17 @@
  *   node deploy-lan/scripts/db-doctor.mjs                       # 仅诊断（结构不一致时退出码 1）
  *   node deploy-lan/scripts/db-doctor.mjs --fix                 # 备份后补齐缺失表/列并登记迁移
  *   node deploy-lan/scripts/db-doctor.mjs --fix --no-backup     # 不备份直接修
- *   node deploy-lan/scripts/db-doctor.mjs --database <abs.db>   # 指定库（默认自动探测）
+ *   node deploy-lan/scripts/db-doctor.mjs --database <abs.db>   # 指定库（最明确，优先）
  *   node deploy-lan/scripts/db-doctor.mjs --set-must-change all # 补齐后让所有人下次登录改密
  *   node deploy-lan/scripts/db-doctor.mjs --set-must-change a,b # 只让指定用户改密
  *   node deploy-lan/scripts/db-doctor.mjs --quiet               # 只输出结果行（供部署脚本调用）
  *   node deploy-lan/scripts/db-doctor.mjs --json                # JSON 输出
+ *
+ * 目标库如何确定（**绝不猜测**，详见 detectDatabase）：
+ *   1) --database <绝对路径>；2) DATABASE_PATH 环境变量；3) 按 NODE_ENV 推导
+ *      （production → data/scienceing.prod.db，否则 data/scienceing.dev.db）。
+ *   三者都要求文件**确实存在**；不满足即报错退出，不会改用其它库。
+ *   历史库 data/scienceing.db 仅可经 --database 显式使用，不参与自动选择。
  */
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -97,30 +103,73 @@ function splitStatements(sql) {
 
 // ───────────────────────── 库探测 ─────────────────────────
 
+/**
+ * 探测到的候选路径 —— **仅用于报错时提示**，不再参与「自动选中」。
+ */
 function candidateDatabases() {
   const list = [];
   if (process.env.DATABASE_PATH) list.push(resolve(process.env.DATABASE_PATH));
   const dataDir = join(REPO_ROOT, 'data');
+  const env = process.env.NODE_ENV === 'production' ? 'production' : 'development';
+  list.push(join(dataDir, env === 'production' ? 'scienceing.prod.db' : 'scienceing.dev.db'));
   for (const name of ['scienceing.prod.db', 'scienceing.dev.db', 'scienceing.db']) {
     list.push(join(dataDir, name));
   }
-  return list;
+  return [...new Set(list)];
 }
 
+/** 已存在的候选（供报错时列出，让操作者一眼看到「它本来会去改哪个库」）。 */
+function existingCandidates() {
+  return candidateDatabases().filter((p) => existsSync(p));
+}
+
+/**
+ * 解析目标数据库。返回 { path, how }，how 用于在输出里说明「为什么是它」。
+ *
+ * **绝不再「挑一个存在的库」。** db-doctor --fix 会写库；若在调用者未指定的情况下
+ * 静默换到另一个库，就会把迁移应用到错误的数据库（生产机改到 dev 库，或反之），
+ * 而输出里那句「结构已是最新」还会让人以为检查过了 —— 这比直接报错危险得多。
+ *
+ * 因此三条路径都要求「显式、且确实存在」；无法确定时立刻失败。
+ * 注意部署流程不受影响：deploy.mjs 与 deploy-release.ps1 都会先设置 DATABASE_PATH
+ * 与 NODE_ENV，且 db:migrate / setupDatabase 已先建库，走到这里时文件必然存在。
+ */
 function detectDatabase(explicit) {
+  // 1) --database 最明确
   if (explicit) {
     const p = resolve(explicit);
     if (!existsSync(p)) throw new Error(`指定的数据库不存在：${p}`);
-    return p;
+    return { path: p, how: '--database 显式指定' };
   }
-  const hit = candidateDatabases().find((p) => existsSync(p));
-  if (!hit) {
+
+  // 2) DATABASE_PATH 是部署脚本注入的显式指令。文件缺失时必须报错，
+  //    不能顺延到别的库 —— 那正是本函数此前最危险的行为。
+  const fromEnv = process.env.DATABASE_PATH;
+  if (fromEnv) {
+    const p = resolve(fromEnv);
+    if (!existsSync(p)) {
+      throw new Error(
+        `DATABASE_PATH 指向的数据库不存在：${p}\n`
+          + '  该变量属显式指定，db-doctor 不会改用其它库（避免把修复应用到错误的数据库）。\n'
+          + '  请先完成数据库初始化，或改用 --database <绝对路径>。',
+      );
+    }
+    return { path: p, how: 'DATABASE_PATH 环境变量' };
+  }
+
+  // 3) 无任何显式指定：按 NODE_ENV 推导唯一目标，不做猜测。
+  const env = process.env.NODE_ENV === 'production' ? 'production' : 'development';
+  const p = join(REPO_ROOT, 'data', env === 'production' ? 'scienceing.prod.db' : 'scienceing.dev.db');
+  if (!existsSync(p)) {
+    const seen = existingCandidates();
     throw new Error(
-      `未找到数据库，已尝试：\n  ${candidateDatabases().join('\n  ')}\n`
-      + '  请用 --database <绝对路径> 指定，或先部署一次生成数据库。',
+      `未指定目标数据库，且按 NODE_ENV=${env} 推导的路径不存在：${p}\n`
+        + '  db-doctor 不会自动改用其它库（例如把生产修复打到 dev 库上）。请显式指定：\n'
+        + '    --database <绝对路径>\n'
+        + `  已探测到的现存库：\n${seen.length ? seen.map((x) => `    ${x}`).join('\n') : '    （无）'}`,
     );
   }
-  return hit;
+  return { path: p, how: `NODE_ENV=${env} 推导` };
 }
 
 // ───────────────────────── 结构检查 ─────────────────────────
@@ -187,6 +236,48 @@ function skipReason(db, stmt) {
   return null;
 }
 
+/**
+ * 已人工复核「重复执行安全」的非 DDL 迁移白名单（key = 迁移版本）。
+ *
+ * 为什么需要它：`db-doctor --fix` **每次部署都会跑**，而 skipReason 只对 DDL
+ * （CREATE TABLE / CREATE INDEX / ALTER ADD COLUMN）做了「对象已存在则跳过」的守卫——
+ * DML 是无条件重放的。当前 003 / 007 的 DML 恰好靠自身 WHERE 条件天然幂等，
+ * 但下一个没有守卫的 UPDATE、或非 OR IGNORE 的 INSERT，会被每次部署重复应用，
+ * 造成难以察觉的数据漂移（例如计数器被反复累加）。
+ *
+ * 判据（新增迁移要进这个表，必须先满足其一）：
+ *   a) 语句自带幂等子句：INSERT OR IGNORE / INSERT OR REPLACE；
+ *   b) WHERE 条件在首轮执行后不再命中（如把旧 key 改成新 key、或直接删除该行）；
+ *   c) 本身是 DELETE，重复执行等价于空操作。
+ */
+const DML_REPLAY_SAFE = new Map([
+  [3, 'UPDATE/DELETE 均以 key = 旧值 为条件；首轮后旧 key 已不存在，重放为空操作'],
+  [7, 'INSERT OR IGNORE + DELETE ... WHERE key IN (...)；按主键收敛，重放为空操作'],
+]);
+
+/** 去掉语句开头的 -- 注释行，便于判定首关键字。 */
+function stripLeadingComments(stmt) {
+  return stmt.replace(/^(?:\s*--[^\n]*\n)+/, '').trim();
+}
+
+/**
+ * 非 DDL 语句的安全网：只有登记在白名单里的版本才允许被重放 DML。
+ * 未登记则**抛错中止**，而不是静默跳过——静默跳过会让迁移半应用，比直接失败更危险。
+ */
+function assertDmlReplaySafe(version, stmt) {
+  const bare = stripLeadingComments(stmt);
+  if (!/^(UPDATE|INSERT|REPLACE|DELETE)\b/i.test(bare)) return; // 非 DML：DDL 已由 skipReason 处理
+  if (DML_REPLAY_SAFE.has(version)) return;
+
+  throw new Error(
+    `迁移 v${version} 含非 DDL 语句，但未登记为「可安全重放」：\n`
+    + `    ${bare.replace(/\s+/g, ' ').slice(0, 160)}\n`
+    + '  db-doctor --fix 每次部署都会执行它，无幂等守卫的 UPDATE/INSERT 会被重复应用。\n'
+    + '  处理方式：确认重复执行等价于空操作（自带 INSERT OR IGNORE，或 WHERE 在首轮后不再命中），\n'
+    + `  然后在 deploy-lan/scripts/db-doctor.mjs 的 DML_REPLAY_SAFE 里登记 v${version} 并写明理由。`,
+  );
+}
+
 // ───────────────────────── 备份 ─────────────────────────
 
 function backupDatabase(db, dbPath) {
@@ -244,10 +335,18 @@ function main() {
 
   const { source, migrations } = loadMigrations();
   const expectedVersion = migrations.at(-1).version;
-  const dbPath = detectDatabase(opts.database);
+
+  // 目标库在解析阶段就确定，且必须存在；确定不了就直接退出，
+  // 绝不带着「未知目标」继续往下走。
+  let target;
+  try { target = detectDatabase(opts.database); }
+  catch (err) { console.error(`[db-doctor] ${err.message}`); process.exit(2); }
+
+  const dbPath = target.path;
   const db = new DatabaseSync(dbPath);
   const report = {
     database: dbPath,
+    databaseSource: target.how,
     size: statSync(dbPath).size,
     migrationsSource: source,
     expectedVersion,
@@ -297,6 +396,8 @@ function main() {
           for (const stmt of splitStatements(migration.sql)) {
             const reason = skipReason(db, stmt);
             if (reason) { report.fixed.push(`v${migration.version} 跳过：${reason}`); continue; }
+            // DML 必须已登记为可安全重放，否则中止（详见 assertDmlReplaySafe）。
+            assertDmlReplaySafe(migration.version, stmt);
             db.exec(stmt);
           }
           db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)')
@@ -358,6 +459,7 @@ function main() {
     console.log('  数据库结构体检（db-doctor）');
     console.log('═'.repeat(60));
     console.log(`  数据库       : ${dbPath}（${(report.size / 1024).toFixed(0)} KB）`);
+    console.log(`  目标来源     : ${report.databaseSource}`);
     console.log(`  迁移来源     : ${source === 'src' ? '源码 src/db/migrations（最新）' : 'dist 编译产物'}`);
     console.log(`  期望版本     : v${expectedVersion}`);
     console.log(`  已应用版本   : ${report.applied.join(', ') || '（无）'}`);

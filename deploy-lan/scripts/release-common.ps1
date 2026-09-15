@@ -181,7 +181,22 @@ function Resolve-LatestReleaseTag {
 function Resolve-PnpmCommand {
     param([string]$ToolsDirectory = (Join-Path $env:LOCALAPPDATA 'scienceing-tools\pnpm'))
 
-    $pnpmVersion = '9.15.9'   # 与 pnpm-lock.yaml 的 lockfileVersion 9.0 匹配
+    # pnpm 版本以仓库根 package.json 的 packageManager 字段为**唯一来源**
+    # （形如 "pnpm@11.20.0"）。此前这里硬编码 9.15.9，与仓库声明的 11.20.0 相差两个大版本：
+    # 自动装出来的 pnpm 与 CI/开发机并非同一个，lockfile 的解析行为可能不一致。
+    # 只有解析失败时才回退到下面的兜底常量。
+    $pnpmVersion = '11.20.0'
+    $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $packageJsonPath = Join-Path $repoRoot 'package.json'
+    if (Test-Path -LiteralPath $packageJsonPath) {
+        try {
+            $declared = (Get-Content -LiteralPath $packageJsonPath -Raw -Encoding UTF8 | ConvertFrom-Json).packageManager
+            if ($declared -match '^pnpm@(.+)$') { $pnpmVersion = $Matches[1] }
+        }
+        catch {
+            Write-Host "[pnpm] 无法解析 package.json#packageManager，回退到 pnpm@$pnpmVersion"
+        }
+    }
 
     # 环境变量可指定已就绪的 pnpm（离线环境推荐：$env:SCIENCEING_PNPM 指向 pnpm.cjs）
     foreach ($candidate in @($env:SCIENCEING_PNPM, (Join-Path $ToolsDirectory 'node_modules\pnpm\bin\pnpm.cjs'))) {

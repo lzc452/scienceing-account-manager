@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import {
   ConflictException,
   ForbiddenException,
@@ -9,7 +10,7 @@ import { DatabaseService } from '../../db/database.service';
 import { AuditService } from '../../db/audit.service';
 import { ACCOUNT_STATUS, AUDIT_ACTION, AUDIT_RESULT, LEASE_STATUS, RELEASE_REASON } from '../../db/constants';
 import { generateLeaseToken, hashLeaseToken } from '../../crypto/lease-token';
-import { decryptSecret, parsePayload } from '../../crypto/secret-box';
+import { accountAad, decryptSecret, parsePayload } from '../../crypto/secret-box';
 import { loadMasterKey } from '../../crypto/master-key';
 import { isPasswordProvisioned } from '../../crypto/account-password-state';
 import { nowIso } from '../../db/config';
@@ -19,6 +20,20 @@ import type { AccountCredentialsView, AccountRow, LeaseRow, LeaseView } from './
 /** 无操作超时默认 24 小时（配置单位为小时，见 system_settings.inactivity_timeout_hours） */
 const DEFAULT_INACTIVITY_TIMEOUT_HOURS = 24;
 const DEFAULT_MIN_EXTENSION_VERSION = '1.0.0';
+
+/**
+ * 恒定时间比较两个十六进制哈希串。
+ *
+ * 用 `!==` 比较会在第一个不同字符处提前返回，比较耗时随「匹配前缀长度」变化，
+ * 理论上可被计时侧信道逐位逼近 token。timingSafeEqual 的耗时与内容无关。
+ * 长度不等时直接判否（长度本身不是机密，且 timingSafeEqual 要求等长入参）。
+ */
+function hashEquals(a: string, b: string): boolean {
+  const left = Buffer.from(a, 'utf8');
+  const right = Buffer.from(b, 'utf8');
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
+}
 
 @Injectable()
 export class LeasesService {
@@ -63,7 +78,7 @@ export class LeasesService {
       .get(userId, LEASE_STATUS.ACTIVE) as unknown as LeaseRow | undefined;
     if (existing) {
       const token = this.rotateToken(existing.id);
-      return this.buildClaimResponse(existing.id, token, userId);
+      return this.buildClaimResponse(existing.id, token);
     }
 
     db.exec('BEGIN IMMEDIATE');
@@ -74,7 +89,7 @@ export class LeasesService {
       const candidates = db
         .prepare('SELECT * FROM scienceing_accounts WHERE status = ? AND enabled = 1 ORDER BY id')
         .all(ACCOUNT_STATUS.AVAILABLE) as unknown as AccountRow[];
-      const account = candidates.find((c) => isPasswordProvisioned(c.current_password_ciphertext));
+      const account = candidates.find((c) => isPasswordProvisioned(c.id, c.current_password_ciphertext));
       if (!account) {
         db.exec('ROLLBACK');
         this.audit.record({
@@ -120,7 +135,7 @@ export class LeasesService {
         leaseId,
         metadata: { accountCode: account.code },
       });
-      return this.buildClaimResponse(leaseId, token, userId);
+      return this.buildClaimResponse(leaseId, token);
     } catch (err) {
       try {
         db.exec('ROLLBACK');
@@ -267,26 +282,44 @@ export class LeasesService {
 
     let recycled = 0;
     for (const candidate of candidates) {
-      const updated = db
-        .prepare(
-          `UPDATE leases SET status = ?, release_reason = ?, release_requested_at = ?, updated_at = ?
-           WHERE id = ? AND status = ? AND last_activity_at <= ?`,
-        )
-        .run(LEASE_STATUS.RECYCLING, RELEASE_REASON.INACTIVITY_TIMEOUT, now, now, candidate.id, LEASE_STATUS.ACTIVE, threshold);
-      if (Number(updated.changes) !== 1) {
-        continue; // 回收前刚有 Activity 续期，跳过（避免误踢）
+      // 三次写必须原子（对齐 release() 的事务模板）：
+      // 中途异常会让账号停在 RECYCLING 却没有对应的 reset_job —— 既不会被 Worker 消费，
+      // 也不会被任何重试逻辑捡回，只能人工修库。
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const updated = db
+          .prepare(
+            `UPDATE leases SET status = ?, release_reason = ?, release_requested_at = ?, updated_at = ?
+             WHERE id = ? AND status = ? AND last_activity_at <= ?`,
+          )
+          .run(LEASE_STATUS.RECYCLING, RELEASE_REASON.INACTIVITY_TIMEOUT, now, now, candidate.id, LEASE_STATUS.ACTIVE, threshold);
+        if (Number(updated.changes) !== 1) {
+          db.exec('ROLLBACK');
+          continue; // 回收前刚有 Activity 续期，跳过（避免误踢）
+        }
+
+        db.prepare('UPDATE scienceing_accounts SET status = ?, updated_at = ? WHERE id = ? AND status = ?').run(
+          ACCOUNT_STATUS.RECYCLING,
+          now,
+          candidate.account_id,
+          ACCOUNT_STATUS.IN_USE,
+        );
+        db.prepare(
+          `INSERT INTO reset_jobs (account_id, lease_id, status, attempt_count, created_at) VALUES (?, ?, ?, 0, ?)`,
+        ).run(candidate.account_id, candidate.id, 'PENDING', now);
+
+        db.exec('COMMIT');
+      } catch (err) {
+        try {
+          db.exec('ROLLBACK');
+        } catch {
+          // 已回滚或未开启
+        }
+        throw err;
       }
 
-      db.prepare('UPDATE scienceing_accounts SET status = ?, updated_at = ? WHERE id = ? AND status = ?').run(
-        ACCOUNT_STATUS.RECYCLING,
-        now,
-        candidate.account_id,
-        ACCOUNT_STATUS.IN_USE,
-      );
-      db.prepare(
-        `INSERT INTO reset_jobs (account_id, lease_id, status, attempt_count, created_at) VALUES (?, ?, ?, 0, ?)`,
-      ).run(candidate.account_id, candidate.id, 'PENDING', now);
-
+      // 审计写在事务之外（与 release() 一致）：避免把 audit_logs 的写入
+      // 一起绑进租约事务、拉长持锁时间。
       this.audit.record({
         action: AUDIT_ACTION.TIMEOUT,
         result: AUDIT_RESULT.SUCCESS,
@@ -312,7 +345,7 @@ export class LeasesService {
       throw new UnauthorizedException('缺少 leaseToken');
     }
     const lease = this.dbService.db.prepare('SELECT * FROM leases WHERE id = ?').get(leaseId) as unknown as LeaseRow | undefined;
-    if (!lease || lease.lease_token_hash !== hashLeaseToken(token)) {
+    if (!lease || !hashEquals(lease.lease_token_hash, hashLeaseToken(token))) {
       throw new UnauthorizedException('无效的 leaseToken');
     }
     return lease;
@@ -321,12 +354,10 @@ export class LeasesService {
   private buildClaimResponse(
     leaseId: number,
     token: string,
-    userId: number,
   ): { leaseToken: string; lease: LeaseView; account: AccountCredentialsView } {
     const db = this.dbService.db;
     const lease = db.prepare('SELECT * FROM leases WHERE id = ?').get(leaseId) as unknown as LeaseRow;
     const account = db.prepare('SELECT * FROM scienceing_accounts WHERE id = ?').get(lease.account_id) as unknown as AccountRow;
-    void userId;
     return {
       leaseToken: token,
       lease: this.toLeaseView(lease, account),
@@ -376,7 +407,7 @@ export class LeasesService {
     }
     try {
       const payload = parsePayload(account.current_password_ciphertext);
-      return decryptSecret(payload, loadMasterKey());
+      return decryptSecret(payload, loadMasterKey(), accountAad(account.id));
     } catch (err) {
       console.error(
         `[leases] 账号 ${account.code} 密码解密失败（密文损坏或主密钥不匹配）:`,

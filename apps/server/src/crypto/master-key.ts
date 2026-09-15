@@ -12,10 +12,19 @@ export function generateMasterKey(): { hex: string; key: Buffer } {
 }
 
 /**
+ * 进程级兜底 key 缓存。
+ *
+ * 未设置环境变量时只能生成临时 key，但**必须**在进程内复用同一个：
+ * 否则每次调用都返回新 key，加密与解密用的不是同一把钥匙，
+ * 任何刚写入的密文都立刻读不回来（claim 时解密失败 → 密码降级为空串）。
+ */
+let fallbackKey: Buffer | null = null;
+
+/**
  * 从环境变量读取 Master Key（PRD §41/§42：独立 Master Key 走环境变量，不落代码与 Git）。
  *
- * 未设置时生成一次性临时 key 并告警——仅开发/种子可用；生产必须显式设置
- * `SCIENCEING_MASTER_KEY`，否则进程重启后无法解密已存的科应账号密码。
+ * 生产环境缺失时**直接抛错**：缺 key 还继续运行，只会写出「重启后无法解密」的密文，
+ * 把一次配置疏漏延后成静默的数据损坏。开发/测试仍允许临时 key（进程内复用）。
  */
 export function loadMasterKey(env: NodeJS.ProcessEnv = process.env): Buffer {
   const hex = env[MASTER_KEY_ENV];
@@ -28,6 +37,19 @@ export function loadMasterKey(env: NodeJS.ProcessEnv = process.env): Buffer {
     }
     return key;
   }
-  process.stderr.write(`[warn] 未设置 ${MASTER_KEY_ENV}，使用临时随机 Master Key（仅本进程有效）\n`);
-  return randomBytes(MASTER_KEY_BYTES);
+
+  if (env.NODE_ENV === 'production') {
+    throw new Error(
+      `生产环境必须显式设置 ${MASTER_KEY_ENV}（${MASTER_KEY_BYTES * 2} 个 hex 字符）。`
+        + '未设置时进程只能生成临时 key，重启后已入库的科应账号密码将无法解密。',
+    );
+  }
+
+  if (!fallbackKey) {
+    fallbackKey = randomBytes(MASTER_KEY_BYTES);
+    process.stderr.write(
+      `[warn] 未设置 ${MASTER_KEY_ENV}，本进程使用临时随机 Master Key（仅本进程有效，重启后已存密码不可解密）\n`,
+    );
+  }
+  return fallbackKey;
 }

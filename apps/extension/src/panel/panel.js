@@ -401,6 +401,9 @@
 
   function onPointerDown(e) {
     if (e.button !== 0) return;
+    // pos 要等 mount() 里的 await loadPos() 才赋值；在此之前触发拖拽会让 pos.x 抛 TypeError。
+    // 没有位置就不启动拖拽（applyPos 里已有同样的守卫）。
+    if (!pos) return;
     const hostEl = e.target?.closest?.('.ring-host');
     if (!hostEl) return;
     if (e.target?.closest?.('[data-action]')) return; // 浮层按钮不触发拖拽
@@ -469,6 +472,33 @@
     applyPos();
 
     if (!tickTimer) tickTimer = setInterval(tick, 1000);
+    // 页面卸载时清理：SPA 场景下 document 可能长期存活，
+    // 只创建不清理的定时器会一直跑（每秒读时间并触发渲染）。
+    window.addEventListener('pagehide', unmount, { once: true });
+  }
+
+  /**
+   * 卸载面板：清定时器 + 摘掉所有监听 + 移除宿主节点。
+   * tickTimer 此前只创建、从不清理，属明确的资源泄漏。
+   */
+  function unmount() {
+    if (tickTimer) {
+      clearInterval(tickTimer);
+      tickTimer = null;
+    }
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    window.removeEventListener('pagehide', unmount);
+    if (root) {
+      root.removeEventListener('click', onClick);
+      root.removeEventListener('pointerdown', onPointerDown);
+      root.removeEventListener('keydown', onRingKey);
+    }
+    if (host && host.parentNode) host.parentNode.removeChild(host);
+    host = null;
+    root = null;
+    wrapper = null;
+    dragStart = null;
   }
 
   // 供 scienceing content script 调用（manifest 按序注入同一隔离世界）
@@ -480,5 +510,6 @@
       await mount();
       render();
     },
+    unmount,
   };
 })();

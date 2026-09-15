@@ -11,7 +11,7 @@ import {
 } from '../modules/manual/manual-default';
 import { hashPassword } from '../crypto/password';
 import { loadMasterKey } from '../crypto/master-key';
-import { encryptSecret, parsePayload, decryptSecret, serializePayload } from '../crypto/secret-box';
+import { accountAad, encryptSecret, parsePayload, decryptSecret, serializePayload } from '../crypto/secret-box';
 
 export const SEED_ACCOUNT_CODES = Array.from({ length: 10 }, (_, i) => `KY-${String(i + 1).padStart(2, '0')}`);
 /** @deprecated 统一使用 db/constants 的 PLACEHOLDER_ACCOUNT_PASSWORD，此处仅保留兼容别名。 */
@@ -53,7 +53,7 @@ export function assertPasswordsReadable(db: DatabaseSync, masterKey: Buffer): vo
   for (const row of rows) {
     if (!row.current_password_ciphertext) continue;
     try {
-      decryptSecret(parsePayload(row.current_password_ciphertext), masterKey);
+      decryptSecret(parsePayload(row.current_password_ciphertext), masterKey, accountAad(row.id));
     } catch {
       unreadableCodes.push(row.code);
     }
@@ -93,12 +93,18 @@ export async function seedDatabase(db: DatabaseSync, options: SeedOptions = {}):
     for (const code of SEED_ACCOUNT_CODES) {
       const existing = db.prepare('SELECT id FROM scienceing_accounts WHERE code = ?').get(code);
       if (existing) continue;
-      const ciphertext = serializePayload(encryptSecret(SEED_PLACEHOLDER_PASSWORD, masterKey));
-      db.prepare(`
+      // 两段式：占位密文的 AAD 绑定自增 id，只能先插入拿到 id 再回写
+      // （与 admin.service.createAccount 一致；用 code 作 AAD 会在改名后解不开）。
+      const info = db.prepare(`
         INSERT INTO scienceing_accounts
           (code, username, current_password_ciphertext, pending_password_ciphertext, status, last_password_changed_at, enabled, created_at, updated_at)
-        VALUES (?, ?, ?, NULL, ?, ?, 1, ?, ?)
-      `).run(code, code.toLowerCase(), ciphertext, ACCOUNT_STATUS.AVAILABLE, now, now, now);
+        VALUES (?, ?, NULL, NULL, ?, ?, 1, ?, ?)
+      `).run(code, code.toLowerCase(), ACCOUNT_STATUS.AVAILABLE, now, now, now);
+      const accountId = Number(info.lastInsertRowid);
+      const ciphertext = serializePayload(
+        encryptSecret(SEED_PLACEHOLDER_PASSWORD, masterKey, accountAad(accountId)),
+      );
+      db.prepare('UPDATE scienceing_accounts SET current_password_ciphertext = ? WHERE id = ?').run(ciphertext, accountId);
       accountsInserted += 1;
     }
 

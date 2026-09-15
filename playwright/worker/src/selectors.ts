@@ -1,4 +1,5 @@
 import type { Locator, Page } from 'playwright';
+import { log } from './logger';
 
 /**
  * 真实科应平台（www.scienceing.com）页面定位器（2026-09-02 按真实 DOM 核对）。
@@ -99,11 +100,6 @@ export function accountSearchButton(page: Page): Locator {
   return page.locator('[class*="account_userlist_buttons"] button').filter({ hasText: /查\s*询/ }).first();
 }
 
-/** 「重 置」按钮（筛选项，当前流程未使用，仅健康检查/人工排查备用）。 */
-export function accountResetFilterButton(page: Page): Locator {
-  return page.locator('[class*="account_userlist_buttons"] button').filter({ hasText: /重\s*置/ }).first();
-}
-
 /** 以科应账号 username 定位表格行：存在 td[title="username"]（title 与单元格文本均为科应账号用户名）。 */
 export function accountRow(page: Page, accountUsername: string): Locator {
   return page.locator('tr').filter({ has: page.locator(`td[title="${escapeAttr(accountUsername)}"]`) });
@@ -144,9 +140,19 @@ export async function modalNewPasswordInput(page: Page): Promise<Locator | null>
       return loc.first();
     }
   }
+  // 兜底：弹窗内**唯一**可见的 password 输入框。
+  // 若存在多个（如「新密码」+「确认密码」），说明无法可靠区分目标字段——
+  // 此时**拒绝猜测**并返回 null，让调用方明确报错，而不是随便挑一个把别的字段改掉。
   const fallback = page.locator('.ant-modal-body input[type="password"]');
-  if ((await fallback.count()) > 0 && (await fallback.first().isVisible().catch(() => false))) {
-    return fallback.first();
+  const visible: Locator[] = [];
+  const total = await fallback.count();
+  for (let i = 0; i < total; i += 1) {
+    const candidate = fallback.nth(i);
+    if (await candidate.isVisible().catch(() => false)) visible.push(candidate);
+  }
+  if (visible.length === 1) return visible[0] ?? null;
+  if (visible.length > 1) {
+    log(`[selectors] 弹窗内有 ${visible.length} 个可见密码输入框，无法确定目标字段，已拒绝兜底猜测`);
   }
   return null;
 }
@@ -164,20 +170,6 @@ export function notificationCheckbox(page: Page, text: string): Locator {
 /** 弹窗 footer「确 定」按钮（文本带空格，正则匹配）。 */
 export function modalConfirmButton(page: Page): Locator {
   return page.locator('.ant-modal-footer').getByRole('button', { name: /确\s*定/ });
-}
-
-/**
- * 单点登录强制下线确认框（真实科应特性）。
- * 管理员账号在别处已登录时，提交后会弹出「由于您的账号已经在其他地方登录...」确认框，
- * 需点「确 定」强制下线其他设备才能继续。AntD Modal.confirm 渲染容器为
- * `.ant-modal-confirm`（区别于改密弹窗的 `.ant-modal`/`.ant-modal-footer`）。
- */
-export function singleSessionConfirmModal(page: Page): Locator {
-  return page.locator('.ant-modal-confirm');
-}
-
-export function singleSessionConfirmButton(page: Page): Locator {
-  return singleSessionConfirmModal(page).getByRole('button', { name: /确\s*定/ });
 }
 
 /** 成功文案（PRD §31：真实 toast 为「重置成功」，用 exact 避免误命中）。 */

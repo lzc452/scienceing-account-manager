@@ -14,6 +14,14 @@ export interface ResetJobInput {
 export interface ResetJobResult {
   success: boolean;
   error?: string;
+  /**
+   * 致命失败：环境/配置层面的问题，重试再多次也不会成功
+   * （如缺少 Worker 环境变量、Worker CLI 未构建）。
+   *
+   * 这类失败**不得**计入 attempt_count：否则一次配置疏漏会在几十秒内
+   * 把整池已释放账号逐个烧成 ERROR，且每个都白跑 3 轮浏览器。
+   */
+  fatal?: boolean;
 }
 
 /** 改密执行器：生产中由 Playwright Worker（t11）实现；测试用 mock。 */

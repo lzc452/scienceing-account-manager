@@ -9,6 +9,14 @@ export class ResetQueueScheduler implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly resetService: ResetService) {}
 
   onModuleInit(): void {
+    // 启动即清扫：上个进程若在 RUNNING 中途退出，该 job 会永久卡住（调度器只捡 PENDING）。
+    try {
+      const swept = this.resetService.sweepStaleRunningJobs();
+      if (swept > 0) console.warn(`[reset] 启动清扫：${swept} 个遗留 RUNNING job 已退回 PENDING`);
+    } catch (err) {
+      console.error('[reset] 启动清扫失败:', err);
+    }
+
     const intervalMs = Number(process.env.RESET_INTERVAL_MS ?? 10000);
     this.timer = setInterval(() => {
       void this.resetService.processPendingJobs().catch((err: unknown) => {

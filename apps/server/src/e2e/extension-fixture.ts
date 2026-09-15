@@ -1,7 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import type { DatabaseSync } from 'node:sqlite';
 import request from 'supertest';
-import { encryptSecret, serializePayload } from '../crypto/secret-box';
+import { accountAad, encryptSecret, serializePayload } from '../crypto/secret-box';
 
 export const TEST_EXTENSION_ID = 'abcdefghijklmnopabcdefghijklmnop';
 export const TEST_ACCOUNT_PASSWORD = 'managed-account-password';
@@ -63,7 +63,18 @@ export async function completeSeedAdminFirstLogin(
 
 /** seed 账号的占位密码不可领取；E2E 显式换成可解密的真实测试密码。 */
 export function provisionSeedAccounts(db: DatabaseSync, masterKey: Buffer): void {
-  const ciphertext = serializePayload(encryptSecret(TEST_ACCOUNT_PASSWORD, masterKey));
-  db.prepare('UPDATE scienceing_accounts SET current_password_ciphertext = ?, last_password_changed_at = ?')
-    .run(ciphertext, new Date().toISOString());
+  // 必须**逐账号**用各自的 account.id 作 AAD 单独加密。
+  // 此前是所有行共用同一份密文 —— 那正是 AAD 要防的形态：
+  // 一份密文可以贴到任意账号行上，密文与账号之间没有任何绑定关系。
+  const rows = db.prepare('SELECT id FROM scienceing_accounts').all() as Array<{ id: number }>;
+  const now = new Date().toISOString();
+  const update = db.prepare(
+    'UPDATE scienceing_accounts SET current_password_ciphertext = ?, last_password_changed_at = ? WHERE id = ?',
+  );
+  for (const row of rows) {
+    const ciphertext = serializePayload(
+      encryptSecret(TEST_ACCOUNT_PASSWORD, masterKey, accountAad(row.id)),
+    );
+    update.run(ciphertext, now, row.id);
+  }
 }

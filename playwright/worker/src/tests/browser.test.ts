@@ -43,6 +43,18 @@ let browser: Browser | null = null;
 let skipReason: string | null = null;
 let tempDir = '';
 
+/**
+ * 实际执行（未被跳过）的浏览器用例数。
+ *
+ * `node --test` 在用例被 `t.skip()` 时仍以退出码 0 结束，因此「测试通过」无法区分
+ * 「用例真的跑过」与「用例全部被跳过」——发布门禁形同虚设。下面的 after 钩子
+ * 会断言这个计数不低于 {@link MIN_EXECUTED_TESTS}。
+ */
+let executedCount = 0;
+
+/** 期望至少执行的浏览器用例数。**新增用例时请同步调大此值。** */
+const MIN_EXECUTED_TESTS = 7;
+
 before(async () => {
   const html = fs.readFileSync(path.join(repoRoot(), 'playwright', 'worker', 'mock', 'scienceing-admin.html'));
   server = http.createServer((_req, res) => {
@@ -72,6 +84,16 @@ after(async () => {
   if (browser) await browser.close().catch(() => undefined);
   if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
   if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+
+  // L1-27：断言浏览器用例真的跑过，而不是被整批跳过。
+  // 抛错会让 `node --test` 以非 0 退出，从而真正卡住发布流程。
+  if (executedCount < MIN_EXECUTED_TESTS) {
+    throw new Error(
+      `浏览器用例仅实际执行 ${executedCount}/${MIN_EXECUTED_TESTS} 个，发布门禁不成立。`
+        + (skipReason ? `\n跳过原因：${skipReason}` : '')
+        + '\n若本机缺少 Chrome，请在具备浏览器的环境中重跑；不要把它当作「测试通过」。',
+    );
+  }
 });
 
 function config(overrides?: Partial<WorkerConfig>): WorkerConfig {
@@ -96,6 +118,8 @@ function requireBrowser(t: TestContext): Browser | null {
     t.skip(skipReason ?? '浏览器不可用');
     return null;
   }
+  // 唯一入口：只有真正拿到浏览器、即将执行断言的用例才计数。
+  executedCount += 1;
   return browser;
 }
 

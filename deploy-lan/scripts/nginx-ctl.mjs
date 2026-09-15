@@ -7,10 +7,10 @@
  *    deploy-lan/nginx-prefix/，配置/日志/临时文件全部与项目共存，启动即验证、失败可回退。
  */
 import { spawnSync, spawn } from 'node:child_process';
-import { mkdirSync, copyFileSync, existsSync, writeFileSync, rmSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, copyFileSync, existsSync, writeFileSync, rmSync, readdirSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import {
-  NGINX_PREFIX, findNginxExe, log, die, sleep, isPortFree, waitPort, pidOnPort, killPid,
+  NGINX_PREFIX, log, die, isPortFree, waitPort,
 } from './lib.mjs';
 
 export function nginxVersion(nginxExe) {
@@ -20,6 +20,45 @@ export function nginxVersion(nginxExe) {
   return m ? m[1] : '?';
 }
 
+/** logs/ 下必须保留、不得删除的文件（运行中实例仍在使用）。 */
+const LOG_KEEP = new Set(['nginx.pid']);
+
+/** 轮转文件保留天数；超过即删除，避免 .bak 无限累积。 */
+const LOG_RETENTION_DAYS = 7;
+
+/**
+ * 日志轮转：把历史日志改名归档，而不是清空目录。
+ *
+ * 此前这里无条件删除 logs/ 下的**所有**文件，包括运行中实例的 nginx.pid。后果有二：
+ *  ① 优雅停止（nginx -s quit）依赖 pid 文件，被删后退化成强杀；
+ *  ② 失败路径指引用户去读的 error.log 被一并销毁，排障线索直接消失。
+ *
+ * 现在保留 pid，其余改名归档；被占用而改不动的文件跳过（清理是尽力而为，不阻断部署）。
+ */
+function rotateNginxLogs(logsDir) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+  for (const name of readdirSync(logsDir)) {
+    if (LOG_KEEP.has(name)) continue;
+    try {
+      renameSync(join(logsDir, name), join(logsDir, `${name}.${stamp}.bak`));
+    } catch {
+      // 文件被运行中的 nginx 占用 / 权限不足：保留原状即可
+    }
+  }
+
+  // 清理超期归档，保证目录不会无限增长。
+  const cutoff = Date.now() - LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  for (const name of readdirSync(logsDir)) {
+    if (!name.endsWith('.bak')) continue;
+    try {
+      if (statSync(join(logsDir, name)).mtimeMs < cutoff) rmSync(join(logsDir, name), { force: true });
+    } catch {
+      // 忽略单个文件的清理失败
+    }
+  }
+}
+
 /** 准备 prefix 目录结构 + mime.types + 渲染 nginx.conf。 */
 export function ensureNginxPrefix({ nginxExe, gatewayPort, webDist, backendHost = '127.0.0.1', backendPort }) {
   const confDir = join(NGINX_PREFIX, 'conf');
@@ -27,10 +66,8 @@ export function ensureNginxPrefix({ nginxExe, gatewayPort, webDist, backendHost 
   const tempDir = join(NGINX_PREFIX, 'temp');
   for (const d of [confDir, logsDir, tempDir]) mkdirSync(d, { recursive: true });
 
-  // 清理历史日志，避免旧实例残留误导（保留最近一次 error.log 内容由 nginx 重写覆盖）
-  for (const f of readdirSync(logsDir)) {
-    try { rmSync(join(logsDir, f), { force: true }); } catch { /* ignore */ }
-  }
+  // 日志轮转（保留 nginx.pid；详见 rotateNginxLogs 注释）
+  rotateNginxLogs(logsDir);
 
   // mime.types：从 nginx 安装目录 conf 复制（读操作，无需管理员）
   const mimeSrc = join(dirname(nginxExe), 'conf', 'mime.types');
@@ -40,6 +77,18 @@ export function ensureNginxPrefix({ nginxExe, gatewayPort, webDist, backendHost 
     copyFileSync(mimeSrc, mimeDst);
     log(`已复制 mime.types → ${mimeDst}`);
   }
+
+  // 安全响应头（与 gateway.mjs 的 SECURITY_HEADERS 保持一致）。
+  //
+  // ⚠ nginx 的 add_header **不继承**：子 location 一旦自己写了 add_header，
+  // 父级（server/http）的全部失效。因此凡是自带 add_header 的 location
+  // 都必须重复声明一次，否则那些响应会静默丢掉 CSP。
+  const securityHeaders = [
+    `add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;`,
+    'add_header X-Content-Type-Options "nosniff" always;',
+    'add_header X-Frame-Options "DENY" always;',
+    'add_header Referrer-Policy "same-origin" always;',
+  ].join('\n        ');
 
   // nginx 配置相对路径以 prefix 为基准；include 用绝对路径，杜绝歧义
   const conf = `# 科应共享账号管理平台 内网网关（由 deploy-lan 自动生成）
@@ -60,6 +109,9 @@ http {
 
         root   ${webDist.replace(/\\/g, '/')};
         index  index.html;
+
+        # 安全响应头（含 CSP）；带 add_header 的子 location 需各自重复声明
+        ${securityHeaders}
 
         # SPA history 路由回退：直接访问 /admin/xxx 或刷新不 404
         location / {
@@ -84,6 +136,8 @@ http {
             location ~ \.zip$ {
                 default_type application/zip;
                 add_header Content-Disposition 'attachment';
+                # 本块自带 add_header → 必须重复声明，否则此处响应丢失 CSP
+                ${securityHeaders}
             }
         }
 
@@ -92,6 +146,8 @@ http {
             root ${webDist.replace(/\\/g, '/')};
             expires 7d;
             add_header Cache-Control "public, immutable";
+            # 同上：自带 add_header 会切断继承
+            ${securityHeaders}
             try_files $uri =404;
         }
     }
@@ -129,21 +185,3 @@ export async function nginxStart(nginxExe, confPath, gatewayPort) {
   return { ok: true };
 }
 
-export async function nginxStop(nginxExe, confPath, gatewayPort) {
-  // 优雅停止（通过 prefix 内的 pid 文件）
-  spawnSync(nginxExe, ['-s', 'quit', '-p', NGINX_PREFIX, '-c', confPath], {
-    encoding: 'utf8', timeout: 10_000, windowsHide: true,
-  });
-  for (let i = 0; i < 20; i++) {
-    if (await isPortFree(gatewayPort)) return true;
-    await sleep(250);
-  }
-  // 兜底：直接结束占用进程
-  const pid = await pidOnPort(gatewayPort);
-  if (pid) await killPid(pid);
-  return isPortFree(gatewayPort);
-}
-
-export async function nginxIsRunning(gatewayPort) {
-  return !(await isPortFree(gatewayPort));
-}

@@ -6,9 +6,41 @@
  *   username/displayName/department/role/password）。
  */
 
-/** 去除 BOM + 按行切分（引号内的换行已在上一步处理，这里简单 split 即可） */
+/**
+ * 去除 BOM + 按**逻辑行**切分：跟踪引号状态，引号内的换行不切断行。
+ *
+ * 此前这里直接 `split(/\r?\n/)`，注释却写着「引号内的换行已在上一步处理」——
+ * 实际并没有任何一步处理它。于是 `"第一行\n第二行",x` 这种合法 CSV（RFC 4180
+ * 允许字段内换行）会被切成两条记录，第二条与表头列数不齐 → 该行数据静默错位。
+ */
 function splitRows(text) {
-  return text.replace(/^\uFEFF/, '').split(/\r?\n/)
+  const src = text.replace(/^\uFEFF/, '')
+  const rows = []
+  let current = ''
+  let inQuotes = false
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i]
+    if (ch === '"') {
+      // 引号内的 "" 是转义：整对保留，交给 parseLine 还原
+      if (inQuotes && src[i + 1] === '"') {
+        current += '""'
+        i += 1
+        continue
+      }
+      inQuotes = !inQuotes
+      current += ch
+      continue
+    }
+    if (!inQuotes && (ch === '\n' || ch === '\r')) {
+      if (ch === '\r' && src[i + 1] === '\n') i += 1 // \r\n 记作一次换行
+      rows.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  rows.push(current)
+  return rows
 }
 
 /** 解析单行（含引号字段），返回字段数组；行列数不齐时由调用方兜底 */

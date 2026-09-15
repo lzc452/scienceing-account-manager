@@ -11,7 +11,7 @@ import { ACCOUNT_STATUS, AUDIT_ACTION, AUDIT_RESULT, LEASE_STATUS, RELEASE_REASO
 import { AutomationService } from '../automation/automation.service';
 import { verifyPassword } from '../../crypto/password';
 import { signVerifyToken, VERIFY_PURPOSE } from '../../crypto/verify-token';
-import { encryptSecret, serializePayload } from '../../crypto/secret-box';
+import { accountAad, encryptSecret, serializePayload } from '../../crypto/secret-box';
 import { loadMasterKey } from '../../crypto/master-key';
 import { generateAccountPassword } from '../../crypto/account-password';
 import { isPasswordProvisioned } from '../../crypto/account-password-state';
@@ -158,7 +158,7 @@ export class AdminService {
       lastPasswordChangedAt: row.last_password_changed_at,
       enabled: row.enabled === 1,
       createdAt: row.created_at,
-      passwordProvisioned: isPasswordProvisioned(row.current_password_ciphertext),
+      passwordProvisioned: isPasswordProvisioned(row.id, row.current_password_ciphertext),
     }));
   }
 
@@ -380,7 +380,7 @@ export class AdminService {
       lastPasswordChangedAt: row.last_password_changed_at,
       enabled: row.enabled === 1,
       createdAt: row.created_at,
-      passwordProvisioned: isPasswordProvisioned(row.current_password_ciphertext),
+      passwordProvisioned: isPasswordProvisioned(row.id, row.current_password_ciphertext),
     };
   }
 
@@ -406,16 +406,36 @@ export class AdminService {
       throw new ConflictException(`科应账号「${username}」已存在`);
     }
 
-    const ciphertext = serializePayload(encryptSecret(SEED_PLACEHOLDER_PASSWORD, loadMasterKey()));
     const now = nowIso();
-    const info = db
-      .prepare(
-        `INSERT INTO scienceing_accounts
-          (code, username, current_password_ciphertext, pending_password_ciphertext, status, last_password_changed_at, enabled, created_at, updated_at)
-         VALUES (?, ?, ?, NULL, ?, ?, 1, ?, ?)`,
-      )
-      .run(code, username, ciphertext, ACCOUNT_STATUS.AVAILABLE, now, now, now);
-    const id = Number(info.lastInsertRowid);
+
+    // 两段式插入：占位密文必须绑定 account.id 作 AAD，而自增 id 只有插入后才知道。
+    // 用 code 当 AAD 看似更省事，但 code 可被改名 —— 一旦改名密文就再也解不开，
+    // 所以只能用不可变的 id。两段式放在同一事务里，避免中途失败留下 NULL 密文。
+    db.exec('BEGIN IMMEDIATE');
+    let id: number;
+    try {
+      const info = db
+        .prepare(
+          `INSERT INTO scienceing_accounts
+            (code, username, current_password_ciphertext, pending_password_ciphertext, status, last_password_changed_at, enabled, created_at, updated_at)
+           VALUES (?, ?, NULL, NULL, ?, ?, 1, ?, ?)`,
+        )
+        .run(code, username, ACCOUNT_STATUS.AVAILABLE, now, now, now);
+      id = Number(info.lastInsertRowid);
+
+      const ciphertext = serializePayload(
+        encryptSecret(SEED_PLACEHOLDER_PASSWORD, loadMasterKey(), accountAad(id)),
+      );
+      db.prepare('UPDATE scienceing_accounts SET current_password_ciphertext = ? WHERE id = ?').run(ciphertext, id);
+      db.exec('COMMIT');
+    } catch (err) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        /* 已回滚 */
+      }
+      throw err;
+    }
 
     this.audit.record({
       action: AUDIT_ACTION.ACCOUNT_CREATE,
@@ -503,7 +523,8 @@ export class AdminService {
   private enqueueReset(account: AccountRow, adminUser: AuthUser, auditAction: string): void {
     const db = this.dbService.db;
     const newPassword = generateAccountPassword(); // 规则见 crypto/account-password.ts（集中定义）
-    const pendingCiphertext = serializePayload(encryptSecret(newPassword, loadMasterKey()));
+    // AAD 绑定 account.id，与 reset.service 的写入路径保持一致
+    const pendingCiphertext = serializePayload(encryptSecret(newPassword, loadMasterKey(), accountAad(account.id)));
     const now = nowIso();
     let leaseId: number | null = null;
 

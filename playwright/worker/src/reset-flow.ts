@@ -91,7 +91,19 @@ export async function performReset(
   // 3) 密码重置方式 → 指定密码，并填入新密码。
   const pwdInput = await selectCustomPasswordMode(page, config);
   await pwdInput.fill(newPassword);
-  log('[reset] 已选择「指定密码」并填入新密码');
+
+  // 回读校验：弹窗标题正确**不代表**填进了正确的输入框。
+  // modalNewPasswordInput 在候选 placeholder 全部落空时会兜底匹配弹窗内任意 password 输入框，
+  // 一旦选错字段就提交，等于把另一个字段改成了新密码（且成功 toast 照常出现，无从察觉）。
+  // 因此提交前必须回读确认；不一致就中止，绝不带着不确定的状态提交。
+  const filled = await pwdInput.inputValue().catch(() => null);
+  if (filled !== newPassword) {
+    const actual = filled === null ? '读取失败' : `${filled.length} 位`;
+    throw new Error(
+      `新密码未正确填入目标输入框（期望 ${newPassword.length} 位，实际 ${actual}），已中止提交以免改错字段`,
+    );
+  }
+  log('[reset] 已选择「指定密码」并填入新密码（已回读校验）');
 
   // 4) 静默重置：取消邮箱/短信通知勾选（真实科应默认勾选，会向账号发通知；文案为「邮箱通知/短信通知」）。
   await ensureNotificationUnchecked(page, NOTIFICATION_EMAIL_TEXT);

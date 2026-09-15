@@ -67,12 +67,11 @@ export class AdminController {
 
   /** 自动化健康检查（管理员登录 / 账号管理页 / 改密入口）；error 携带失败原因（如缺少 Worker 环境变量 / 页面改版）。 */
   @Post('health-check')
-  healthCheck(@CurrentUser() admin: AuthUser): Promise<{
+  healthCheck(): Promise<{
     lastCheckedAt: string | null;
     error?: string | null;
     items: Array<{ key: string; label: string; ok: boolean }>;
   }> {
-    void admin;
     return this.adminService.healthCheck();
   }
 

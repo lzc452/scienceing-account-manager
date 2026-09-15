@@ -74,12 +74,49 @@ export async function isAuthenticated(page: Page): Promise<boolean> {
   }
 }
 
+/** 本机地址：测试 mock 服务用 http 是正常用法，不该告警。 */
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+}
+
+let warnedInsecureTarget = false;
+
+/**
+ * 目标地址传输安全性检查（L2-11）。
+ *
+ * 科应后台是公网站点，管理员凭据一旦经 http 明文提交即等同泄露。
+ * 只对**非本机**的 http 目标告警一次；本机地址（浏览器测试的 mock）不告警。
+ *
+ * 刻意只告警、不拒绝：内网自建或反向代理场景可能需要 http，
+ * 直接抛错会让这些合法部署无法工作；而静默接受又会让明文提交无人察觉。
+ */
+function warnIfInsecureTarget(config: WorkerConfig): void {
+  if (warnedInsecureTarget) return;
+  const targets: ReadonlyArray<readonly [string, string]> = [
+    ['SCIENCING_ADMIN_URL', config.adminUrl],
+    ['SCIENCING_LOGIN_URL', config.loginUrl],
+  ];
+  for (const [label, url] of targets) {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      continue; // 非标准 URL（如 file:// mock）交由 Playwright 自行报错
+    }
+    if (parsed.protocol === 'https:' || isLoopbackHost(parsed.hostname)) continue;
+    warnedInsecureTarget = true;
+    step(`[warn] ${label} 指向非加密地址 ${parsed.protocol}//${parsed.hostname}：`
+      + '管理员凭据将以明文提交，请改用 https。');
+  }
+}
+
 /**
  * 管理员登录（真实科应）：
  *  打开登录页 → 填用户名/密码 → 勾选协议 → 提交 → 等离开登录页 → 显式进入账号管理页。
  * 返回时 page 已停在账号管理页且筛选组件可见（context 由调用方负责关闭）。
  */
 export async function loginAdmin(page: Page, config: WorkerConfig): Promise<void> {
+  warnIfInsecureTarget(config);
   step('login: 打开登录页 ' + config.loginUrl);
   await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded' });
   const s = buildSelectors(page);

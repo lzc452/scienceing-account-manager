@@ -75,7 +75,27 @@ function Stop-StaleServicePorts {
             $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$ownerPid" -ErrorAction SilentlyContinue
             $commandLine = if ($proc) { [string]$proc.CommandLine } else { '' }
             if (-not $commandLine) { continue }
-            if ($commandLine -match 'scienceing|apps[\\/]server|dist[\\/]main\.js|gateway\.mjs|nginx-prefix') {
+            # 判据与 deploy-lan/scripts/lib.mjs 的 isOurServiceCmd 保持一致：按解析后的
+            # 产物路径匹配，不再用裸子串 'scienceing'——否则仓库目录下打开的编辑器、
+            # 终端、或任何把该路径当参数传的进程都会被误判为「本项目的」而被强杀。
+            # 两处判据必须同步修改。
+            $normalizedCmd = ($commandLine -replace '\\', '/').ToLowerInvariant()
+            $markers = @(
+                (Join-Path $Root 'apps/server/dist'),      # 后端产物
+                (Join-Path $Root 'deploy-lan/scripts'),    # 网关 / 部署脚本
+                (Join-Path $Root 'nginx-prefix')           # 隔离 nginx 实例
+            )
+            $isOurs = $false
+            foreach ($marker in $markers) {
+                $needle = ($marker -replace '\\', '/').ToLowerInvariant()
+                if ($normalizedCmd.Contains($needle)) { $isOurs = $true; break }
+            }
+            if (-not $isOurs) {
+                # 兜底：以相对路径启动的后端入口（cwd 在 apps/server 时执行 node dist/main.js）
+                $isOurs = $commandLine -match '(^|[\s\\/])dist[\\/]main\.js'
+            }
+
+            if ($isOurs) {
                 Write-Host "[deploy] 端口 $port 被旧实例占用（pid $ownerPid），自动停止…"
                 Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
                 Start-Sleep -Seconds 2

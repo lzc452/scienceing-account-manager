@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { HealthCheckDetail, HealthCheckExecutor, ResetExecutor, ResetJobInput, ResetJobResult } from './automation.types';
 import { checkWorkerEnv, parseWorkerJson, runWorkerCli } from './worker-client';
+import { redactSecrets } from '../../lib/redact';
 
 /** Worker `reset` 命令 stdout 结构（worker.ts ResetJobResult）。 */
 interface WorkerResetOutput {
@@ -27,16 +28,26 @@ interface WorkerCheckOutput {
 @Injectable()
 export class PlaywrightResetExecutor implements ResetExecutor {
   async execute(input: ResetJobInput): Promise<ResetJobResult> {
+    // 环境预检失败属致命错误：重试不会让缺失的环境变量出现，
+    // 标记 fatal 让队列暂停并上报配置问题，而不是把账号一个个烧成 ERROR。
     const envError = checkWorkerEnv();
-    if (envError) return { success: false, error: envError };
+    if (envError) return { success: false, error: envError, fatal: true };
 
-    const result = await runWorkerCli(['reset', '--username', input.accountUsername, '--password', input.newPassword]);
+    // 口令经 stdin 传入（不进 argv、不进进程列表）；--job-id 用于结果文件归属校验。
+    const result = await runWorkerCli(
+      ['reset', '--job-id', String(input.jobId), '--username', input.accountUsername, '--password-stdin'],
+      { stdin: input.newPassword, expectJobId: input.jobId },
+    );
     const output = parseWorkerJson<WorkerResetOutput>(result.raw);
-    if (result.ok && output?.status === 'SUCCESS') {
+    // 只要 Worker 明确给出 SUCCESS 就判定成功——即便进程超时、退出码非 0 或被强杀。
+    // 此前额外要求 result.ok 会丢弃「已打印 SUCCESS 但未正常退出」的结果，
+    // 导致平台口令已改、库里却记失败，最终账号被标 ERROR 且密文与平台发散。
+    if (output?.status === 'SUCCESS') {
       return { success: true };
     }
     // 失败路径优先取 Worker 的具体错误（如「账号未出现成功文案」），其次取子进程错误。
-    const error = output?.error ?? result.error ?? 'Worker 输出无法解析';
+    // 脱敏后再外传：该文案会写入 reset_jobs.error_message 与审计 metadata。
+    const error = redactSecrets(output?.error ?? result.error ?? 'Worker 输出无法解析', [input.newPassword]);
     return { success: false, error };
   }
 }

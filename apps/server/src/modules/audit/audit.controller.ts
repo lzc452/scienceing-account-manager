@@ -65,6 +65,20 @@ export class AuditController {
     };
   }
 
+  /**
+   * 动作中文名查询。
+   *
+   * AUDIT_ACTION_LABEL 的类型是 `Record<keyof typeof AUDIT_ACTION, string>`，
+   * 因此**不能**直接用数据库里的裸 string 索引（那正是此前 `Record<string, string>`
+   * 掩盖的问题：拼错或漏译都只会静默返回 undefined）。这里显式判存在性，
+   * 未收录的动作返回 null，由前端兜底显示英文。
+   */
+  private actionLabel(action: string): string | null {
+    return Object.prototype.hasOwnProperty.call(AUDIT_ACTION_LABEL, action)
+      ? AUDIT_ACTION_LABEL[action as keyof typeof AUDIT_ACTION_LABEL]
+      : null;
+  }
+
   private toView(row: AuditLogRow) {
     return {
       id: row.id,
@@ -75,7 +89,7 @@ export class AuditController {
       leaseId: row.lease_id,
       action: row.action,
       /** 动作中文名（AUDIT_ACTION_LABEL）；未收录的新动作返回 null，前端兜底显示英文。 */
-      actionLabel: AUDIT_ACTION_LABEL[row.action] ?? null,
+      actionLabel: this.actionLabel(row.action),
       result: row.result,
       ip: row.ip,
       userAgent: row.user_agent,

@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { findRepoRoot } from './logger';
 
 /**
  * Worker 配置（PRD §29 / §42）。
@@ -49,9 +50,27 @@ function envInt(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-/** 默认 storageState 路径：<repo>/playwright/.auth/admin.json（PRD §29）。 */
-export function defaultStorageStatePath(cwd: string = process.cwd()): string {
-  return path.join(cwd, 'playwright', '.auth', 'admin.json');
+/**
+ * 解析布尔环境变量：接受 1/true/yes/on 为真，0/false/no/off 为假；
+ * 未设置或取值无法识别时返回兜底值。大小写与首尾空白均忽略。
+ */
+function envBool(name: string, fallback: boolean): boolean {
+  const raw = env(name)?.trim().toLowerCase();
+  if (raw === undefined) return fallback;
+  if (['1', 'true', 'yes', 'on'].includes(raw)) return true;
+  if (['0', 'false', 'no', 'off'].includes(raw)) return false;
+  return fallback;
+}
+
+/**
+ * 默认 storageState 路径：<仓库根>/playwright/.auth/admin.json（PRD §29）。
+ *
+ * 基准是**仓库根**而非 process.cwd()：后端用子进程拉起 Worker 时，
+ * 两者的 cwd 并不相同（后端可能是 apps/server），沿用 cwd 会让
+ * 「保存的会话」与「下次加载的会话」落在两个不同文件上，表现为反复重登。
+ */
+export function defaultStorageStatePath(repoRoot: string = findRepoRoot()): string {
+  return path.join(repoRoot, 'playwright', '.auth', 'admin.json');
 }
 
 /**
@@ -92,7 +111,9 @@ export function loadConfigFromEnv(): WorkerConfig {
     adminPassword,
     storageStatePath: env('SCIENCING_STORAGE_STATE') ?? defaultStorageStatePath(),
     browserChannel: channel === 'msedge' || channel === 'chromium' ? channel : 'chrome',
-    headless: env('SCIENCING_BROWSER_HEADLESS') !== '0',
+    // 此前是 `!== '0'`，于是 SCIENCING_BROWSER_HEADLESS=false / no / off 全都被当成 true（无头），
+    // 与字面含义相反。改走 envBool，接受常见的真/假写法。
+    headless: envBool('SCIENCING_BROWSER_HEADLESS', true),
     defaultTimeoutMs: envInt('SCIENCING_DEFAULT_TIMEOUT_MS', 15_000),
     resetSuccessText: env('SCIENCING_RESET_SUCCESS_TEXT') ?? '重置成功',
     retryDelayMs: envInt('SCIENCING_RETRY_DELAY_MS', 3_000),

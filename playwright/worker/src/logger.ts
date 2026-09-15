@@ -15,7 +15,12 @@ import * as path from 'node:path';
 
 let currentLogPath: string | null = null;
 
-function findRepoRoot(): string {
+/**
+ * 向上查找仓库根（以 pnpm-workspace.yaml 为标志）。
+ * 导出给 config.ts 复用：路径解析不能依赖 process.cwd()——后端是以自己的 cwd
+ * 拉起 Worker 的，两者 cwd 不同会导致读到/写入不同的会话文件。
+ */
+export function findRepoRoot(): string {
   let dir = __dirname;
   for (;;) {
     if (fs.existsSync(path.join(dir, 'pnpm-workspace.yaml'))) return dir;

@@ -8,7 +8,7 @@
  *  - 所有对外部进程的调用都返回可解析结果并写入运行日志，便于双击 .bat 后排查。
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, appendFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, appendFileSync, rmSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -75,15 +75,22 @@ export function section(title) {
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** 探测端口是否已被监听（TCP connect 成功 = 有监听者）。 */
+/**
+ * 探测端口是否已被监听（TCP connect 成功 = 有监听者）。
+ *
+ * 超时**不可**当作「空闲」：DROP 型防火墙会让 SYN 既不被拒绝也无响应，
+ * 于是被误判为端口可用，直到真正启动服务才发现端口已被占用。
+ * 这里把超时归入「未知 → 视为占用」，宁可让调用方多确认一次。
+ * （回环地址上关闭的端口会立刻返回 ECONNREFUSED，正常不会走到超时分支。）
+ */
 export function probePortInUse(port, host = '127.0.0.1') {
   return new Promise((resolvePromise) => {
     const socket = createConnection({ port, host });
     const settle = (inUse) => { socket.destroy(); resolvePromise(inUse); };
     socket.setTimeout(700);
     socket.on('connect', () => settle(true));      // 连上 = 端口有监听
-    socket.on('error', () => settle(false));       // ECONNREFUSED = 空闲
-    socket.on('timeout', () => settle(false));
+    socket.on('error', () => settle(false));       // ECONNREFUSED 等明确失败 = 空闲
+    socket.on('timeout', () => settle(true));      // 无响应 = 未知，保守视为占用
   });
 }
 
@@ -99,6 +106,24 @@ export async function waitPort(port, timeoutMs, host = '127.0.0.1') {
   return false;
 }
 
+/**
+ * 剥离行尾注释：仅当 `#` 出现在**引号之外**且前面是空白（或位于行首）时才算注释。
+ * 引号内的 `#` 属于取值本身，例如 `TOKEN="a # b"`。
+ */
+function stripTrailingComment(value) {
+  let quote = null;
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch === '#' && (i === 0 || /\s/.test(value[i - 1]))) return value.slice(0, i).trim();
+  }
+  return value.trim();
+}
+
 /** 极简 .env 解析：支持 # 注释（含行内注释）、export 前缀、单双引号、去 BOM。 */
 export function parseEnvFile(content) {
   const result = {};
@@ -107,14 +132,17 @@ export function parseEnvFile(content) {
     if (!line || line.startsWith('#')) continue;
     const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
     if (!m) continue;
-    let v = m[2].trim();
-    // 引号包裹：整体取值（引号内允许 # / 空格）；否则剥离行内注释（从「空格+#」起）
-    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
-      v = v.slice(1, -1);
-    } else {
-      v = v.split(/\s+#/)[0].trim();
-    }
-    result[m[1]] = v;
+
+    // 必须**先剥离行尾注释、再判断引号包裹**。反过来的话，
+    // `LAN_IP="10.1.1.1" # 内网地址` 不满足「以引号结尾」，会落到去注释分支，
+    // 结果留下字面引号 → 拼出 `http://"10.1.1.1":18080`。
+    const cleaned = stripTrailingComment(m[2]);
+    const quoted =
+      cleaned.length >= 2
+      && ((cleaned.startsWith('"') && cleaned.endsWith('"'))
+        || (cleaned.startsWith("'") && cleaned.endsWith("'")));
+
+    result[m[1]] = quoted ? cleaned.slice(1, -1) : cleaned;
   }
   return result;
 }
@@ -272,6 +300,57 @@ export function processCmdline(pid) {
   return psJson(
     `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}" -ErrorAction SilentlyContinue | Select-Object -First 1).CommandLine`,
   );
+}
+
+/**
+ * 清空目录中除 keepNames 之外的所有顶层条目。
+ *
+ * 用于构建产物同步前清理陈旧文件：只增不删会让带哈希的旧 chunk 永久累积。
+ * 删除失败只回调报告、不抛错——Windows 上文件被杀软/句柄瞬时占用是常态，
+ * 清理属于尽力而为，不应中断部署。返回成功删除的顶层条目数。
+ */
+export function clearDirectoryExcept(dir, keepNames = [], onError) {
+  if (!existsSync(dir)) return 0;
+  const keep = new Set(keepNames);
+  let removed = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (keep.has(entry.name)) continue;
+    try {
+      rmSync(join(dir, entry.name), { recursive: true, force: true });
+      removed += 1;
+    } catch (err) {
+      if (onError) onError(join(dir, entry.name), err);
+    }
+  }
+  return removed;
+}
+
+/**
+ * 判断某个进程命令行是否属于「本项目的服务进程」——即该不该被部署脚本自动结束。
+ *
+ * 为什么不能用裸子串：此前 deploy.mjs 与 deploy-release.ps1 各自用 `/scienceing/`
+ * 匹配，任何命令行里恰好出现该词的进程都会被判定成「我们自己的」并被强杀——
+ * 包括在仓库目录下打开的编辑器、终端、甚至任何把该路径当参数传的进程。
+ *
+ * 改为匹配**解析后的产物路径**：只有命令行确实指向本仓库的后端产物、
+ * 网关脚本或隔离 nginx 前缀时才算数。deploy-release.ps1 里有一份等价实现
+ * （PS 无法直接复用 JS），修改时请同步——两边必须保持同一判据。
+ */
+export function isOurServiceCmd(commandLine) {
+  if (!commandLine) return false;
+  const normalize = (value) => value.replace(/\\/g, '/').toLowerCase();
+  const cmd = normalize(commandLine);
+
+  const markers = [
+    join(APP_SERVER, 'dist'),      // 后端产物：node <repo>/apps/server/dist/main.js
+    join(DEPLOY_DIR, 'scripts'),   // 网关：    node <repo>/deploy-lan/scripts/gateway.mjs
+    NGINX_PREFIX,                  // 隔离 nginx：nginx.exe -p <prefix>
+  ];
+  if (markers.some((marker) => cmd.includes(normalize(marker)))) return true;
+
+  // 兜底：以相对路径启动的后端入口（如 cwd=apps/server 时执行 `node dist/main.js`）。
+  // 前置边界需同时接受空格与路径分隔符；仍远窄于原来的裸子串匹配。
+  return /(^|[\s/\\])dist[/\\]main\.js/i.test(commandLine);
 }
 
 /** 查进程是否存活。 */

@@ -18,7 +18,7 @@
  *   db:doctor         数据库结构体检/自愈（直接解析源码迁移，dist 旧也能补齐表/列）
  *   db:reset-admin    把 admin 口令重置为仓库 .env 的 ADMIN_INITIAL_PASSWORD
  *   env:print         打印解析后的关键环境配置（不含密码明文以外的敏感值结构）
- *   env:init          生成/补全仓库根 .env 模板（新电脑首选；不覆盖已有值；master key 缺失时随机生成）
+ *   env:init          生成/补全仓库根 .env 模板（新电脑首选；不覆盖已有值；master key 与 admin 初始口令均随机生成）
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -28,6 +28,7 @@ import { dirname, join } from 'node:path';
 import {
   log, die, section, sleep, run, productionEnv, readEnvFile, findNodeBin, loadConfig,
   detectLanIp, httpGet, waitPort, isPortFree, pidOnPort, processCmdline, killPid, processAlive,
+  isOurServiceCmd, clearDirectoryExcept,
   writeJson, readJson, findNginxExe, psJson, dirFilesRecursive, writeZip,
   REPO_ROOT, APP_SERVER, APP_WEB, APP_EXTENSION, WORKER_DIR, WEB_DIST, RUN_DIR, DIST_DIR, ENV_FILE,
   DB_FILE, BACKUP_DIR, NGINX_PREFIX, RUNTIME_ROOT,
@@ -95,7 +96,9 @@ async function stopBackend({ backendPort, force = false }) {
   const owner = await pidOnPort(backendPort);
   if (owner) {
     const cmd = await processCmdline(owner);
-    const ours = /scienceing|dist[\\/]main\.js|apps[\\/]server/i.test(cmd || '');
+    // 判据见 lib.mjs isOurServiceCmd：按解析后的产物路径匹配，
+    // 不再用裸子串 scienceing（会把编辑器/终端等无关进程一并强杀）。
+    const ours = isOurServiceCmd(cmd);
     if (ours || force) {
       log(`停止后端端口 ${backendPort} 占用进程（pid ${owner}${ours ? '' : '，--force' }）…`);
       await killPid(owner);
@@ -161,7 +164,7 @@ async function stopGateway({ gatewayPort, nginxExe, force = false }) {
   const owner = await pidOnPort(gatewayPort);
   if (owner) {
     const cmd = await processCmdline(owner);
-    const isOurNginx = /nginx-prefix|deploy-lan/i.test(cmd || '');
+    const isOurNginx = isOurServiceCmd(cmd);
     if (isOurNginx || /nginx\.exe/i.test(cmd || '') || force) {
       log(`停止网关端口 ${gatewayPort} 占用进程（pid ${owner}，${isOurNginx ? '本项目 nginx' : 'nginx/force'}）…`);
       if (nginxExe && /nginx\.exe/i.test(cmd || '')) {
@@ -257,12 +260,32 @@ async function buildServer({ nodeBin }) {
   await run(nodeBin, [tsc, '-p', join(APP_SERVER, 'tsconfig.json')], { cwd: REPO_ROOT });
 }
 
+/** dist 中必须保留、不得被构建清理的内容。 */
+const WEB_DIST_KEEP = new Set(['downloads']);
+
+/**
+ * 清理 web dist 中除 downloads/ 之外的内容。
+ *
+ * 原先 syncDir「只增不删」的理由有两条，其中一条只对 downloads/ 成立：
+ *  1) downloads/ 里是部署时生成的扩展 zip，必须保留 —— 仍然成立；
+ *  2) 「Windows 删除常被拦截」—— 这是回避问题的理由，代价是带哈希的旧 chunk
+ *     永久累积（每次构建都留下上一版产物），既吃磁盘，也让「缓存命中旧 chunk」
+ *     这类问题变得难以排查。
+ * 因此把不删的范围收窄到 downloads/，其余每次构建前清空。
+ * 删除失败只记录、不中断（个别文件可能被杀软/句柄占用）。
+ */
+function clearWebDistExceptDownloads() {
+  return clearDirectoryExcept(WEB_DIST, [...WEB_DIST_KEEP], (target, err) => {
+    log(`⚠ 清理失败（可忽略，将保留旧产物）：${target} — ${err?.message ?? err}`);
+  });
+}
+
 /**
  * 把 staging 目录整体覆盖同步到 web dist（只增/覆盖，不删除）。
  *
- * 只覆盖不删除的原因：
- *  1) dist/downloads 里放着部署时生成的扩展 zip，不能被构建清掉；
- *  2) 本机（Windows）删除常被安全策略拦截，脚本一律避开删除。
+ * 清理职责已上移到 clearWebDistExceptDownloads：调用方在同步前先清空
+ * dist 中除 downloads/ 外的内容，因此这里的「不删」不会造成陈旧产物累积。
+ * 保持不删是为了让同步阶段即使个别文件失败（Windows 瞬时 EPERM）也不会丢产物。
  */
 function syncDir(src, dst) {
   mkdirSync(dst, { recursive: true });
@@ -284,19 +307,60 @@ function syncDir(src, dst) {
 // （与根目录 pnpm 工作区无关，避免 workspace 解析干扰）。
 const WEB_THIRD_PARTY_DEPS = ['markdown-it', 'dompurify', 'echarts'];
 
+/** 是否允许在生产机上联网补装前端依赖（默认不允许，需显式开启）。 */
+function npmInstallAllowed() {
+  return process.argv.includes('--allow-npm-install') || cfgBool(process.env.SCIENCING_ALLOW_NPM_INSTALL);
+}
+
+/**
+ * 从 pnpm-lock.yaml 解析某个包被锁定的版本。
+ *
+ * 为什么必须读 lockfile 而不是写死版本号：脚本里原本硬编码的三个版本已经与
+ * lockfile 脱节（dompurify 写 3.2.4、实锁 3.4.14；markdown-it 写 14.1.0、实锁 14.3.1），
+ * 于是「补装」出来的依赖树与 CI/生产正式安装的并不是同一份。
+ */
+function lockedVersion(name) {
+  try {
+    const lock = readFileSync(join(REPO_ROOT, 'pnpm-lock.yaml'), 'utf8');
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const m = new RegExp(`^\\s{2}${escaped}@([^:\\s]+):`, 'm').exec(lock);
+    if (!m) return null;
+    // 去掉 peer 后缀（如 1.2.3(react@18) / 1.2.3_react@18）
+    return m[1].split('(')[0].split('_')[0];
+  } catch {
+    return null;
+  }
+}
+
 function ensureWebDeps() {
   const webNm = join(APP_WEB, 'node_modules');
   const missing = WEB_THIRD_PARTY_DEPS.filter((name) => !existsSync(join(webNm, name, 'package.json')));
   if (missing.length === 0) return;
 
-  section(`前端缺少第三方依赖，自动补装：${missing.join(' / ')}`);
+  // 默认拒绝在生产机上联网装依赖：同一份源码在不同机器上会因此构建出不同的依赖树，
+  // 离线环境还必然失败。需要现场安装时必须显式开启。
+  if (!npmInstallAllowed()) {
+    die(`前端缺少第三方依赖：${missing.join(' / ')}\n` +
+      '  为避免在生产机上联网安装依赖（会让构建结果与 CI 不一致），此处不再自动补装。请二选一：\n' +
+      '   ① 在可联网机器执行 pnpm install，再把 node_modules 同步到目标机（推荐）；\n' +
+      '   ② 确认需要现场安装时，显式加 --allow-npm-install 或设 SCIENCING_ALLOW_NPM_INSTALL=1 后重跑。');
+  }
+
+  // 版本一律取自 lockfile，避免与 CI/生产实际安装的版本脱节。
+  const specs = WEB_THIRD_PARTY_DEPS.map((name) => {
+    const version = lockedVersion(name);
+    if (!version) die(`pnpm-lock.yaml 中找不到 ${name} 的锁定版本，无法保证补装版本与 CI 一致。`);
+    return `${name}@${version}`;
+  });
+
+  section(`前端缺少第三方依赖，按 lockfile 版本补装：${specs.join(' / ')}`);
   const npmBin = process.platform === 'win32' ? 'npm.cmd' : 'npm';
   const tmp = mkdtempSync(join(tmpdir(), 'scienceing-webdeps-'));
   writeFileSync(join(tmp, 'package.json'), JSON.stringify({ name: 'scienceing-webdeps-tmp', private: true }));
   log(`在临时目录安装：${tmp}`);
   const res = spawnSync(
     npmBin,
-    ['install', '--no-audit', '--no-fund', '--ignore-scripts', ...WEB_THIRD_PARTY_DEPS.map((n) => `${n}@${n === 'echarts' ? '5.6.0' : n === 'dompurify' ? '3.2.4' : '14.1.0'}`)],
+    ['install', '--no-audit', '--no-fund', '--ignore-scripts', ...specs],
     // Windows 下 npm.cmd 必须经 shell 启动，否则 spawnSync 直接 ENOENT
     { cwd: tmp, stdio: 'inherit', shell: npmBin.endsWith('.cmd') },
   );
@@ -331,6 +395,15 @@ async function buildWeb({ nodeBin }) {
   // 抛 EPERM（文件被占用），中断的构建会把 index-*.js 写成 0 字节 → 整站白屏。
   // 暂存目录是“新文件写入”，不会撞锁；同步阶段即使个别文件失败也只是旧文件仍在。
   const stage = join(APP_WEB, 'dist-build');
+  // 暂存目录也先清空：vite 以 --emptyOutDir false 运行，不清就会把上一版产物
+  // 一路同步进 dist（同样属于陈旧 chunk 累积）。dist 尚未被触碰，构建失败无影响。
+  if (existsSync(stage)) {
+    try {
+      rmSync(stage, { recursive: true, force: true });
+    } catch (err) {
+      log(`⚠ 暂存目录清理失败（可忽略）：${err?.message ?? err}`);
+    }
+  }
   // 即便写暂存目录，个别同名产物（如 geist woff）仍可能被杀软/句柄瞬时占用而 EPERM，
   // 属随机瞬时故障（vite 的 EPERM 细节只出现在子进程 stderr，异常不带关键词）：
   // 因此失败一律自动重试最多 3 次；非瞬时错误（如 Rollup 解析失败）也会暴露在最终报错里。
@@ -356,6 +429,8 @@ async function buildWeb({ nodeBin }) {
       `  ② Rollup failed to resolve import（缺依赖）→ 确认已联网后重跑 deploy（会 npm 自动补装 markdown-it/dompurify/echarts），或先在有网机器执行 pnpm install`);
   }
   if (!existsSync(join(stage, 'index.html'))) die('前端构建产物缺失 index.html');
+  const cleared = clearWebDistExceptDownloads();
+  if (cleared > 0) log(`已清理 dist 中 ${cleared} 项陈旧产物（保留 ${[...WEB_DIST_KEEP].join(' / ')}）`);
   const n = syncDir(stage, WEB_DIST);
   if (!existsSync(join(WEB_DIST, 'index.html'))) die('前端产物同步失败：dist 缺少 index.html');
   log(`前端产物就绪：${WEB_DIST}（同步 ${n} 个文件，暂存目录 ${stage}）`);
@@ -603,15 +678,18 @@ async function cmdStatus() {
 
 // ───────────────────────── 子命令实现 ─────────────────────────
 
-async function fullDeploy({ nodeBin, cfg, backendPort, gatewayPort, lan, initialize = false }) {
+async function fullDeploy({ nodeBin, cfg, backendPort, gatewayPort, lan, force = false, initialize = false }) {
   const startedAt = Date.now();
   log('');
   log(`部署目标：看板 http://${lan.ip}:${gatewayPort}/   API http://${lan.ip}:${backendPort}/api`);
   log(`node：${nodeBin}`);
+  if (force) log('已启用 --force：端口被非本项目进程占用时将强制结束该进程。');
 
   // 0) 停止旧服务（避免文件占用/端口冲突）
-  await stopBackend({ backendPort });
-  await stopGateway({ gatewayPort, nginxExe: cfg.NGINX_EXE });
+  // force 必须一路传下去：此前它被塞进 options 却从未解构，
+  // 导致 --force 是空操作，而 stopBackend 的报错文案还在教用户「加 --force」。
+  await stopBackend({ backendPort, force });
+  await stopGateway({ gatewayPort, nginxExe: cfg.NGINX_EXE, force });
 
   // 1) 构建
   await buildServer({ nodeBin });
@@ -776,13 +854,22 @@ async function cmdPackExt() {
 async function cmdResetAdmin() {
   const rt = await resolveRuntime();
   const env = productionEnv();
-  const pwd = env.ADMIN_INITIAL_PASSWORD || 'admin12345';
+  // 不再回落到已知弱口令：缺失即失败，把「静默不安全」变成「显式报错」。
+  const pwd = env.ADMIN_INITIAL_PASSWORD;
+  if (!pwd || !pwd.trim()) {
+    die(`未设置 ADMIN_INITIAL_PASSWORD。请先执行 env:init 生成随机口令，或在 ${ENV_FILE} 显式指定。`
+      + '（此处不再提供默认值：默认值会把生产管理员口令重置为公开已知的弱口令。）');
+  }
   const script = `
     const { openDatabase } = require('${join(APP_SERVER, 'dist', 'db', 'connection.js').replace(/\\/g, '/')}');
     const { defaultDatabasePath } = require('${join(APP_SERVER, 'dist', 'db', 'config.js').replace(/\\/g, '/')}');
     const { hashPassword } = require('${join(APP_SERVER, 'dist', 'crypto', 'password.js').replace(/\\/g, '/')}');
     (async () => {
-      const db = openDatabase(defaultDatabasePath());
+      // 先解析并回显目标库：此前未传 env，内联脚本按 NODE_ENV 缺省解析到 dev 库，
+      // 打印「已重置」却完全没碰生产库——恢复路径因此静默说谎。
+      const dbPath = defaultDatabasePath();
+      const db = openDatabase(dbPath);
+      console.log('目标数据库: ' + dbPath);
       try {
         const row = db.prepare("SELECT id FROM users WHERE username = 'admin'").get();
         if (!row) { console.log('admin 不存在，请先执行部署初始化数据库'); process.exit(1); }
@@ -792,7 +879,15 @@ async function cmdResetAdmin() {
         console.log('admin 口令已重置（ADMIN_INITIAL_PASSWORD），下次登录需先修改密码');
       } finally { db.close(); }
     })().catch((e) => { console.error(e.message); process.exit(1); });`;
-  const r = spawnSync(rt.nodeBin, ['-e', script], { encoding: 'utf8', timeout: 30_000, cwd: APP_SERVER, windowsHide: true });
+  // env 必须传入：productionEnv() 会写入 NODE_ENV=production 与 DATABASE_PATH，
+  // 否则 defaultDatabasePath() 按开发环境解析到 .dev.db。
+  const r = spawnSync(rt.nodeBin, ['-e', script], {
+    encoding: 'utf8',
+    timeout: 30_000,
+    cwd: APP_SERVER,
+    env,
+    windowsHide: true,
+  });
   console.log(`${r.stdout || ''}${r.stderr || ''}`);
   process.exit(r.status ?? 1);
 }
@@ -800,7 +895,8 @@ async function cmdResetAdmin() {
 async function cmdEnvInit() {
   const lines = [];
   const header = '# 科应共享账号管理平台 —— 部署环境变量（由 deploy.mjs env:init 生成/补全，已 gitignore）\n'
-    + '# 建议修改：ADMIN_INITIAL_PASSWORD(管理员密码)、SCIENCING_ADMIN_USERNAME/PASSWORD(科应 Worker 凭据)\n'
+    + '# 建议修改：SCIENCING_ADMIN_USERNAME/PASSWORD(科应 Worker 凭据)\n'
+    + '# ADMIN_INITIAL_PASSWORD 由 env:init 随机生成并只显示一次，请先记录再部署（不再有默认口令）。\n'
     + '# ⚠ SCIENCEING_MASTER_KEY 换值会导致已入库密码无法解密：要么沿用首次部署写入的值，要么删库重建（见 README FAQ）。\n';
   if (existsSync(ENV_FILE)) {
     const raw = readFileSync(ENV_FILE, 'utf8').replace(/^\uFEFF/, '');
@@ -812,12 +908,13 @@ async function cmdEnvInit() {
   const have = new Set(lines.map((l) => (/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(l) || [])[1]).filter(Boolean));
   const defaults = {
     PORT: String(BACKEND_DEFAULT_PORT),
-    ADMIN_INITIAL_PASSWORD: 'admin12345',
     SCIENCING_ADMIN_URL: 'https://www.scienceing.com/account/management/list',
     SCIENCING_STORAGE_STATE: join(RUNTIME_ROOT, 'playwright', '.auth', 'admin.json'),
     SCIENCING_WORKER_CLI: join(WORKER_DIR, 'dist', 'cli.js'),
   };
   const created = [];
+  /** 本次新生成的机密值：结尾单独提示操作者记录（只显示一次，不进入 status 输出）。 */
+  const generatedSecrets = [];
   for (const [k, v] of Object.entries(defaults)) {
     if (have.has(k)) continue;
     lines.push(`${k}=${v}`);
@@ -827,6 +924,13 @@ async function cmdEnvInit() {
     lines.push(`SCIENCEING_MASTER_KEY=${randomBytes(32).toString('hex')}`);
     created.push('SCIENCEING_MASTER_KEY');
   }
+  if (!have.has('ADMIN_INITIAL_PASSWORD')) {
+    // 随机生成而非写死：此前默认 admin12345，全新生产部署会直接以公开已知口令上线。
+    const initialPassword = randomBytes(18).toString('base64url');
+    lines.push(`ADMIN_INITIAL_PASSWORD=${initialPassword}`);
+    created.push('ADMIN_INITIAL_PASSWORD');
+    generatedSecrets.push(['ADMIN_INITIAL_PASSWORD', initialPassword]);
+  }
   const missingSecrets = ['SCIENCING_ADMIN_USERNAME', 'SCIENCING_ADMIN_PASSWORD'].filter((k) => !have.has(k));
   if (missingSecrets.length > 0) {
     lines.push('', '# 科应管理员凭据（Playwright 改密 Worker 使用，PRD §42：只走环境变量、绝不入库/入库代码）', ...missingSecrets.map((k) => `${k}=`));
@@ -835,6 +939,9 @@ async function cmdEnvInit() {
   writeFileSync(ENV_FILE, lines.filter((_, i, a) => !(i < a.length - 1 && a[i] === '' && a[i + 1] === '')).join('\n').replace(/\n+$/, '\n'), 'utf8');
   console.log(`[env:init] ${created.length > 0 ? `已新增/补全：${created.join(', ')}` : '环境变量已齐全，未改动任何值'}`);
   console.log(`[env:init] 文件：${ENV_FILE}`);
+  for (const [key, value] of generatedSecrets) {
+    console.log(`[env:init] 本次生成的 ${key}（仅此一次显示，请立即记录到密码管理器）：${value}`);
+  }
   if (created.includes('SCIENCEING_MASTER_KEY')) console.log('[env:init] ⚠ 本次生成了新的 SCIENCEING_MASTER_KEY。已有生产库时必须恢复其原 master key，禁止删库或覆盖密文。');
   if (missingSecrets.length > 0) console.log(`[env:init] ⚠ 请手动填写 ${missingSecrets.join(' / ')}（科应后台管理员凭据）后重新部署。`);
   console.log('[env:init] 修改完成后：node deploy-lan/scripts/deploy.mjs deploy（或双击 deploy-update.bat）');
@@ -843,9 +950,18 @@ async function cmdEnvInit() {
 async function cmdEnvPrint() {
   const rt = await resolveRuntime();
   const env = readEnvFile(ENV_FILE);
+  // **allowlist**：只有显式列在这里的键才明文打印，其余一律只显示「已设置」。
+  // 此前用 /PASSWORD|KEY|SECRET/ 名称模式判断（denylist）——将来新增一个名字不含这三个词的
+  // 敏感项（TOKEN / CREDENTIAL / PASSWD …）就会被默认明文打印出来。
+  const PRINTABLE = new Set(['PORT', 'SCIENCING_ADMIN_URL', 'SCIENCING_WORKER_CLI', 'SCIENCING_STORAGE_STATE']);
+  const KEYS = [
+    'PORT', 'SCIENCEING_MASTER_KEY', 'ADMIN_INITIAL_PASSWORD',
+    'SCIENCING_ADMIN_URL', 'SCIENCING_WORKER_CLI', 'SCIENCING_STORAGE_STATE',
+  ];
   console.log('仓库 .env 关键项：');
-  for (const k of ['PORT', 'SCIENCEING_MASTER_KEY', 'ADMIN_INITIAL_PASSWORD', 'SCIENCING_ADMIN_URL', 'SCIENCING_WORKER_CLI', 'SCIENCING_STORAGE_STATE']) {
-    if (env[k] !== undefined) console.log(`  ${k}=${/PASSWORD|KEY|SECRET/i.test(k) ? '(已设置，略)' : env[k]}`);
+  for (const k of KEYS) {
+    if (env[k] === undefined) continue;
+    console.log(`  ${k}=${PRINTABLE.has(k) ? env[k] : '(已设置，略)'}`);
   }
   console.log(`node = ${rt.nodeBin}`);
   console.log(`局域网 IP = ${rt.lan.ip} (${rt.lan.alias})`);

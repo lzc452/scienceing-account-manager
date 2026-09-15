@@ -11,6 +11,11 @@ const COPIED_TIMEOUT_MS = 6_000
  * 密码遮蔽 / 显示 / 复制（§4.3）。
  * 默认遮蔽；显示后 30s 自动重新遮蔽；复制后 6s 显示「已复制 ✓」。
  * 显示 / 复制动作通过事件上抛（用于审计，不携带密码本体）。
+ *
+ * 显示按钮是**规范要求**，不要移除：PRODUCT-DESIGN §4.3 明确
+ * 「`显示` 按钮：点击后显示明文，30 秒后自动重新遮蔽；遮蔽/显示状态在按钮文本上同步
+ *（显示 ⇄ 隐藏），不使用纯图标」。此前该按钮被整段注释掉，导致 visible / scheduleMask /
+ * REVEAL_TIMEOUT_MS / reveal 事件与 Eye 图标全部不可达，界面退化为「只能复制、永远遮蔽」。
  */
 const props = defineProps({
   password: { type: String, required: true },
@@ -85,7 +90,7 @@ onBeforeUnmount(() => {
       {{ visible ? password : MASK }}
     </code>
 
-    <!-- <button
+    <button
       type="button"
       class="inline-flex h-8 shrink-0 items-center gap-1 rounded-2xl border border-hairline bg-transparent px-2.5 text-xs font-medium text-ink transition-colors hover:bg-surface-alt"
       :aria-label="visible ? '隐藏密码' : '显示密码'"
@@ -94,7 +99,7 @@ onBeforeUnmount(() => {
       <EyeOff v-if="visible" class="size-4" />
       <Eye v-else class="size-4" />
       {{ visible ? '隐藏' : '显示' }}
-    </button> -->
+    </button>
 
     <button
       type="button"

@@ -8,7 +8,7 @@ import LeasesPage from '@/pages/admin/LeasesPage.vue'
 import LogsPage from '@/pages/admin/LogsPage.vue'
 import SettingsPage from '@/pages/admin/SettingsPage.vue'
 import ComponentShowcase from '@/views/ComponentShowcase.vue'
-import { authState } from '@/api'
+import { authState, isLoggedIn } from '@/api'
 
 /**
  * 路由（PRD §38）。
@@ -46,23 +46,25 @@ const router = createRouter({
 router.beforeEach((to) => {
   // 首次登录强制改密（t14）：mustChangePassword 用户只能停留在 /force-password，
   // 其它任何页面（含登录页）一律重定向回改密页 —— 弹窗无法通过页面交互关闭。
-  const forced = authState.token && authState.user?.mustChangePassword
+  // 登录态以「用户信息」为准，而非内存中的 token：
+  // token 已不再持久化，刷新后为空，但 httpOnly cookie 会话依然有效。
+  const forced = isLoggedIn.value && authState.user?.mustChangePassword
   if (forced && to.name !== 'force-password') {
     return { name: 'force-password' }
   }
   if (to.name === 'force-password') {
-    if (!authState.token) return { name: 'login' }
+    if (!isLoggedIn.value) return { name: 'login' }
     if (!authState.user?.mustChangePassword) return { name: 'home' }
     return true
   }
-  if (to.meta.requiresAuth && !authState.token) {
+  if (to.meta.requiresAuth && !isLoggedIn.value) {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
   // 非管理员访问 /admin/*：无访问权限，重定向首页（403 语义）
   if (to.meta.requiresAdmin && authState.user?.role !== 'ADMIN') {
     return { name: 'home' }
   }
-  if (to.name === 'login' && authState.token) {
+  if (to.name === 'login' && isLoggedIn.value) {
     return { name: 'home' }
   }
   return true
