@@ -1,0 +1,115 @@
+# 科应共享账号管理平台 —— 云服务器单机编排
+#
+# 部署根目录约定（/opt/scienceing）：
+#   docker-compose.yml   本文件
+#   .env                 密钥与配置，权限 600
+#   release/             Release 制品（Dockerfile 一并放这里）
+#   nginx/               TLS 站点配置
+#   certs/               Let's Encrypt 证书
+#   scripts/             运维脚本
+#
+# 网络设计：
+#   edge      仅 gateway 接入，对外暴露 80/443
+#   internal  app 与 gateway 接入，app **不发布任何端口**
+# 子网固定为 172.28.0.0/16，与 .env 的 TRUST_PROXY 必须一致，
+# 否则 req.ip 会退化成容器 IP、限流键全部撞在一起。
+name: scienceing
+
+services:
+  app:
+    build:
+      context: ./release
+      dockerfile: deploy-cloud/Dockerfile
+    image: scienceing/app:${RELEASE_TAG:-local}
+    container_name: scienceing-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATABASE_PATH: /data/scienceing.prod.db
+      SCIENCEING_BACKUP_DIR: /backups
+      EXTENSION_DOWNLOAD_DIR: /app/apps/web/dist/downloads
+      SCIENCEING_DEPLOY_VERIFY_ONLY: ${SCIENCEING_DEPLOY_VERIFY_ONLY:-0}
+      SCIENCING_STORAGE_STATE: /state/admin.json
+      SCIENCING_WORKER_CLI: /app/playwright/worker/dist/cli.js
+      SCIENCING_BROWSER_CHANNEL: chromium
+      SCIENCING_BROWSER_HEADLESS: "true"
+      TRUST_PROXY: 172.28.0.0/16
+    volumes:
+      - db-data:/data
+      - backup-data:/backups
+      - worker-state:/state
+    networks:
+      - internal
+    # Chromium 在容器内需要足够的 /dev/shm；代码里已有 --disable-dev-shm-usage 兜底，
+    # 这里再给一份实际空间，避免渲染大页面时崩。
+    shm_size: 512m
+    deploy:
+      resources:
+        limits:
+          memory: 1500M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  gateway:
+    image: nginx:1.27-alpine
+    container_name: scienceing-gateway
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # 官方镜像的 envsubst 机制会把它注入 nginx/templates/*.template 生成站点配置
+      DASHBOARD_HOST: ${DASHBOARD_HOST:?请在 .env 中设置 DASHBOARD_HOST}
+      SCIENCEING_DEPLOY_VERIFY_ONLY: ${SCIENCEING_DEPLOY_VERIFY_ONLY:-0}
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+      - ./certs:/etc/letsencrypt:ro
+      - ./release/apps/web/dist:/usr/share/nginx/html:ro
+      - certbot-webroot:/var/www/certbot:ro
+    networks:
+      - edge
+      - internal
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 证书签发/续期工具容器：不随 compose up 启动，按需 run。
+  #   bash scripts/issue-cert.sh    首次签发
+  #   bash scripts/renew-cert.sh    续期（cron 驱动）
+  #
+  # 镜像版本有硬性下限：IP 地址证书需要 Certbot ≥ 5.4（--ip-address + webroot），
+  # shortlived profile 需要 ≥ 4.0（--preferred-profile）。5.8.0 为当前最新版。
+  # 脚本内另有版本守卫，镜像降级时会直接报错而不是签出一张坏证书。
+  certbot:
+    image: certbot/certbot:v5.8.0
+    profiles: ["tools"]
+    volumes:
+      - ./certs:/etc/letsencrypt
+      - certbot-webroot:/var/www/certbot
+
+volumes:
+  db-data:
+  backup-data:
+  worker-state:
+  certbot-webroot:
+
+networks:
+  edge:
+    driver: bridge
+  internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

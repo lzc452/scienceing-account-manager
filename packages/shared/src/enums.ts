@@ -77,6 +77,7 @@ export enum UserRole {
  * 审计日志动作（PRD §37 / §58，PRODUCT-DESIGN §5.8）。
  */
 export enum AuditAction {
+  ADMIN_PASSWORD_REVEAL = 'ADMIN_PASSWORD_REVEAL',
   LOGIN = 'LOGIN',
   LOGOUT = 'LOGOUT',
   CLAIM_ACCOUNT = 'CLAIM_ACCOUNT',

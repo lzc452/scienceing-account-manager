@@ -11,7 +11,7 @@ export type { Migration } from './migrations/migration';
 
 /**
  * 迁移只能追加；已经发布的 version/name/sql 不得修改。
- * 每个迁移由 migrate.ts 在独立事务中执行并登记到 schema_migrations。
+ * 未执行的迁移由 migrate.ts 在同一事务中执行并登记到 schema_migrations。
  */
 export const MIGRATIONS: readonly Migration[] = [
   migration001,

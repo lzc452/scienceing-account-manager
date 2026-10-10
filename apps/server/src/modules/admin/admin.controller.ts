@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AdminService, type AdminAccountView } from './admin.service';
 import { AuthGuard } from '../../guards/auth.guard';
 import { AdminGuard } from '../../guards/admin.guard';
@@ -22,6 +22,12 @@ export class AdminController {
   @Get('accounts')
   accounts(): AdminAccountView[] {
     return this.adminService.listAccounts();
+  }
+
+  @Get('accounts/:id/password')
+  @Header('Cache-Control', 'no-store')
+  accountPassword(@Param('id', ParseIntPipe) id: number, @CurrentUser() admin: AuthUser) {
+    return this.adminService.accountPassword(id, admin);
   }
 
   /** 新增科应账号：POST /admin/accounts { code, username } */

@@ -10,6 +10,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, appendFileSync, rmSync } from 'node:fs';
 import { createConnection } from 'node:net';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,7 +21,7 @@ export const DEPLOY_DIR = resolve(SCRIPTS_DIR, '..');           // <repo>/deploy
 export const REPO_ROOT = resolve(DEPLOY_DIR, '..');             // 仓库根
 export const RUNTIME_ROOT = process.env.SCIENCEING_RUNTIME_DIR
   ? resolve(process.env.SCIENCEING_RUNTIME_DIR)
-  : REPO_ROOT;
+  : resolve(process.env.LOCALAPPDATA ?? homedir(), 'scienceing-account-manager', 'production');
 const EXTERNAL_RUNTIME = RUNTIME_ROOT !== REPO_ROOT;
 export const RUN_DIR = EXTERNAL_RUNTIME ? join(RUNTIME_ROOT, 'run') : join(DEPLOY_DIR, 'run');
 export const DIST_DIR = EXTERNAL_RUNTIME ? join(RUNTIME_ROOT, 'packages') : join(DEPLOY_DIR, 'dist');
@@ -200,7 +201,7 @@ function probeNodeVersion(nodeBin) {
 
 function probeNodeSqlite(nodeBin) {
   try {
-    const r = spawnSync(nodeBin, ['-e', "import('node:sqlite').then(()=>process.exit(0),()=>process.exit(1))"], {
+    const r = spawnSync(nodeBin, ['-e', "import('node:sqlite').then(m=>process.exit(typeof m.backup==='function'?0:1),()=>process.exit(1))"], {
       encoding: 'utf8', timeout: 15_000, windowsHide: true,
     });
     return r.status === 0;
@@ -208,7 +209,7 @@ function probeNodeSqlite(nodeBin) {
 }
 
 /**
- * 探测可用的 Node：>= 22.5 且内置 node:sqlite 可用。
+ * 探测可用的 Node：>= 22.16 且内置 SQLite Backup API 可用。
  * 返回绝对路径；找不到时返回 null。
  */
 export function findNodeBin() {
@@ -220,9 +221,9 @@ export function findNodeBin() {
     if (!bin.toLowerCase().endsWith('node.exe') && bin !== 'node') continue;
     const v = probeNodeVersion(bin);
     if (!v) continue;
-    if (v.major > 22 || (v.major === 22 && v.minor >= 5)) {
+    if (v.major > 22 || (v.major === 22 && v.minor >= 16)) {
       if (probeNodeSqlite(bin)) return bin;
-      log(`⚠ Node ${v.major}.${v.minor} 缺少内置 node:sqlite（需 >= 22.5），尝试其它候选…`);
+      log(`⚠ Node ${v.major}.${v.minor} 缺少 SQLite Backup API，尝试其它候选…`);
     }
   }
   return null;
@@ -346,11 +347,7 @@ export function isOurServiceCmd(commandLine) {
     join(DEPLOY_DIR, 'scripts'),   // 网关：    node <repo>/deploy-lan/scripts/gateway.mjs
     NGINX_PREFIX,                  // 隔离 nginx：nginx.exe -p <prefix>
   ];
-  if (markers.some((marker) => cmd.includes(normalize(marker)))) return true;
-
-  // 兜底：以相对路径启动的后端入口（如 cwd=apps/server 时执行 `node dist/main.js`）。
-  // 前置边界需同时接受空格与路径分隔符；仍远窄于原来的裸子串匹配。
-  return /(^|[\s/\\])dist[/\\]main\.js/i.test(commandLine);
+  return markers.some((marker) => cmd.includes(normalize(marker)));
 }
 
 /** 查进程是否存活。 */

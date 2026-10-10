@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createDatabaseBackup, importDatabase, restoreDatabase } from './backup';
 import { defaultBackupDirectory, defaultDatabasePath } from './config';
-import { openDatabase } from './connection';
+import { DatabaseSync } from 'node:sqlite';
 
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -19,47 +19,45 @@ function emit(result: Record<string, unknown>): void {
   console.log(JSON.stringify(result));
 }
 
-function backup(): void {
+async function backup(): Promise<void> {
   const database = resolve(argument('database') ?? defaultDatabasePath());
   if (!existsSync(database)) throw new Error(`数据库不存在：${database}`);
   const directory = resolve(argument('directory') ?? defaultBackupDirectory());
   const reason = argument('reason') ?? 'manual';
-  const db = openDatabase(database);
+  const db = new DatabaseSync(database, { readOnly: true });
   try {
-    const result = createDatabaseBackup(db, directory, reason);
+    const result = await createDatabaseBackup(db, directory, reason);
     emit({ ok: true, operation: 'backup', database, ...result });
   } finally {
     db.close();
   }
 }
 
-function importLegacy(): void {
+async function importLegacy(): Promise<void> {
   const source = requiredArgument('source');
   const target = resolve(argument('target') ?? defaultDatabasePath());
-  importDatabase(source, target);
+  await importDatabase(source, target);
   emit({ ok: true, operation: 'import', source, target });
 }
 
-function restore(): void {
+async function restore(): Promise<void> {
   const source = requiredArgument('source');
   const target = resolve(argument('target') ?? defaultDatabasePath());
-  const preserved = restoreDatabase(source, target);
+  const preserved = await restoreDatabase(source, target);
   emit({ ok: true, operation: 'restore', source, target, preserved });
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const operation = process.argv[2];
-  if (operation === 'backup') backup();
-  else if (operation === 'import') importLegacy();
-  else if (operation === 'restore') restore();
+  if (operation === 'backup') await backup();
+  else if (operation === 'import') await importLegacy();
+  else if (operation === 'restore') await restore();
   else throw new Error('用法：maintenance <backup|import|restore> [--source PATH] [--target PATH]');
 }
 
 if (require.main === module) {
-  try {
-    main();
-  } catch (error) {
+  main().catch((error: unknown) => {
     console.error(`[db:maintenance] ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
-  }
+  });
 }

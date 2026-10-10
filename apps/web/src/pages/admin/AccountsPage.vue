@@ -1,7 +1,9 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AdminLayout from '@/layouts/AdminLayout.vue'
 import ErrorCard from '@/components/admin/ErrorCard.vue'
+import PasswordReveal from '@/components/PasswordReveal.vue'
+import { isAdmin } from '@/api'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
@@ -25,6 +27,7 @@ import {
   enableAccount,
   forceRelease,
   getAdminAccounts,
+  getAdminAccountPassword,
   markAvailable,
   renameAccount as renameAccountApi,
   resetPassword,
@@ -52,6 +55,39 @@ const error = ref('')
 const accounts = ref([])
 const pending = ref(false)
 const dialog = ref(null) // { type, account }
+
+const passwordTarget = ref(null)
+const passwordValue = ref('')
+const passwordLoading = ref(false)
+const passwordError = ref('')
+let passwordRequest = 0
+
+function closePassword() {
+  passwordRequest += 1
+  passwordTarget.value = null
+  passwordValue.value = ''
+  passwordLoading.value = false
+  passwordError.value = ''
+}
+
+async function showPassword(account) {
+  closePassword()
+  if (!isAdmin.value) return
+  passwordTarget.value = account
+  passwordLoading.value = true
+  const request = passwordRequest
+  try {
+    const result = await getAdminAccountPassword(account.id)
+    if (request === passwordRequest && isAdmin.value) passwordValue.value = result.password
+  } catch (e) {
+    if (request === passwordRequest) passwordError.value = e?.message || '读取密码失败'
+  } finally {
+    if (request === passwordRequest) passwordLoading.value = false
+  }
+}
+
+watch(isAdmin, closePassword)
+onBeforeUnmount(closePassword)
 
 // 改名表单（Bug1：支持修改账号名称，对应科应平台账号）
 const renameOpen = ref(false)
@@ -421,6 +457,9 @@ async function onFix(account) {
                 <TableCell>
                   <!-- whitespace-nowrap：操作按钮不换行，宽度不足时由表格内部滚动承接 -->
                   <div class="flex items-center justify-end gap-2 whitespace-nowrap">
+                    <Button v-if="isAdmin" variant="ghost" size="sm" :disabled="!account.passwordProvisioned" @click="showPassword(account)">
+                      查看密码
+                    </Button>
                     <template v-if="account.status === 'RECYCLING'">
                       <span class="text-xs text-mid-gray">—</span>
                     </template>
@@ -491,6 +530,18 @@ async function onFix(account) {
         </Table>
       </Card>
     </div>
+
+    <Dialog
+      :open="passwordTarget !== null"
+      :title="`查看密码 ${passwordTarget?.code ?? ''}`"
+      description="当前托管密码；显示后 30 秒自动遮蔽。"
+      @update:open="closePassword"
+    >
+      <p v-if="passwordLoading" class="text-sm text-mid-gray">读取中…</p>
+      <p v-else-if="passwordError" role="alert" class="text-sm text-ember">{{ passwordError }}</p>
+      <PasswordReveal v-else-if="passwordValue" :key="passwordTarget?.id" :password="passwordValue" :can-reveal="isAdmin" initially-visible />
+      <template #footer><Button variant="outline" @click="closePassword">关闭</Button></template>
+    </Dialog>
 
     <Dialog
       :open="dialog !== null"

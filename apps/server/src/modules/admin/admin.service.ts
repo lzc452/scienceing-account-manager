@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { DatabaseService } from '../../db/database.service';
@@ -11,7 +12,7 @@ import { ACCOUNT_STATUS, AUDIT_ACTION, AUDIT_RESULT, LEASE_STATUS, RELEASE_REASO
 import { AutomationService } from '../automation/automation.service';
 import { verifyPassword } from '../../crypto/password';
 import { signVerifyToken, VERIFY_PURPOSE } from '../../crypto/verify-token';
-import { accountAad, encryptSecret, serializePayload } from '../../crypto/secret-box';
+import { accountAad, decryptSecret, encryptSecret, parsePayload, serializePayload } from '../../crypto/secret-box';
 import { loadMasterKey } from '../../crypto/master-key';
 import { generateAccountPassword } from '../../crypto/account-password';
 import { isPasswordProvisioned } from '../../crypto/account-password-state';
@@ -160,6 +161,25 @@ export class AdminService {
       createdAt: row.created_at,
       passwordProvisioned: isPasswordProvisioned(row.id, row.current_password_ciphertext),
     }));
+  }
+
+  accountPassword(accountId: number, admin: AuthUser): { accountId: number; password: string } {
+    const account = this.getAccount(accountId);
+    try {
+      if (!account.current_password_ciphertext) throw new ConflictException('账号尚未配置密码');
+      let password: string;
+      try {
+        password = decryptSecret(parsePayload(account.current_password_ciphertext), loadMasterKey(), accountAad(accountId));
+      } catch {
+        throw new ServiceUnavailableException('账号密码解密失败，请检查密钥与数据');
+      }
+      if (!password || password === SEED_PLACEHOLDER_PASSWORD) throw new ConflictException('账号尚未配置密码');
+      this.audit.record({ action: AUDIT_ACTION.ADMIN_PASSWORD_REVEAL, result: AUDIT_RESULT.SUCCESS, userId: admin.id, accountId });
+      return { accountId, password };
+    } catch (error) {
+      this.audit.record({ action: AUDIT_ACTION.ADMIN_PASSWORD_REVEAL, result: AUDIT_RESULT.FAILED, userId: admin.id, accountId });
+      throw error;
+    }
   }
 
   /**

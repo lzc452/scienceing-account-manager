@@ -22,7 +22,7 @@
 ## 2. 系统要求
 
 - Linux / Windows 均可；内存 ≥ 1GB；磁盘 ≥ 2GB。
-- Node.js ≥ 20（建议 24）；pnpm 11。
+- Node.js ≥ 22.16 且支持 SQLite Backup API（建议免安装 Node 24）；开发构建使用 pnpm 11，Windows Release 部署无需 pnpm。
 - Playwright 改密需 Chrome/Edge 及系统依赖（`npx playwright install chrome`，或使用系统已装 Chrome/Edge）。
 
 ## 3. 部署步骤
@@ -34,7 +34,8 @@ pnpm install
 
 # 2. 配置环境变量（写进 systemd/进程管理器或 .env 加载器）
 export SCIENCEING_MASTER_KEY="<64位hex，勿入库>"        # 必填，且必须与首次 seed 时一致
-export DATABASE_PATH="/var/lib/scienceing/scienceing.db"  # 可选
+export NODE_ENV="production"
+export DATABASE_PATH="/var/lib/scienceing/scienceing.prod.db"  # 发布目录之外，必须沿用已有生产库
 export PORT=3000
 export ADMIN_INITIAL_PASSWORD="<强密码>"
 # 企业签名/策略部署时建议固定扩展 ID；多个 ID 用逗号分隔

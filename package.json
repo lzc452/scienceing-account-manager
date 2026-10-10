@@ -4,7 +4,7 @@
   "private": true,
   "packageManager": "pnpm@11.20.0",
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=22.16.0"
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
@@ -17,10 +17,15 @@
     "test:deploy-gateway": "node --test scripts/test/gateway-resilience.test.mjs",
     "test:deploy-utils": "node --test scripts/test/deploy-utils.test.mjs",
     "test:db-doctor": "node --test scripts/test/db-doctor-target.test.mjs",
+    "test:deploy-sqlite": "node --test scripts/test/windows-sqlite-deploy.test.mjs",
+    "test:deploy-cloud": "python scripts/test/cloud-deploy.test.py",
+    "test:release-cloud": "python scripts/test/cloud-release.test.py",
+    "test:password-visibility": "node --test scripts/test/password-visibility.test.mjs",
     "test:security-headers": "node --test scripts/test/security-headers.test.mjs",
     "test:account-crypto": "node --test scripts/test/account-password-crypto.test.mjs",
     "test:backend-invariants": "node --test scripts/test/backend-invariants.test.mjs",
     "db:migrate": "pnpm --filter @scienceing/server db:migrate",
+    "db:inspect": "pnpm --filter @scienceing/server db:inspect",
     "db:seed": "pnpm --filter @scienceing/server db:seed",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

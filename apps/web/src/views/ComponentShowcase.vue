@@ -142,7 +142,7 @@ const filterOptions = [
 
       <!-- 密码展示 -->
       <Section title="PasswordReveal · 遮蔽 / 显示 / 复制（30s 自动遮蔽）">
-        <PasswordReveal password="demo-placeholder" class="max-w-md" />
+        <PasswordReveal password="demo-placeholder" can-reveal class="max-w-md" />
       </Section>
 
       <!-- 插件状态 + 进度条 -->

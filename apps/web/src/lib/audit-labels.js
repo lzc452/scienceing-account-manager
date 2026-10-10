@@ -4,6 +4,7 @@
  * 此处作为筛选 options 与兜底（旧缓存/mock 缺字段时）。
  */
 export const ACTION_LABELS = {
+  ADMIN_PASSWORD_REVEAL: '查看科应账号密码',
   LOGIN: '登录',
   LOGOUT: '退出登录',
   USER_CREATE: '新增用户',

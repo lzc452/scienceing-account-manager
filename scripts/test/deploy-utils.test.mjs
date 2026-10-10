@@ -1,3 +1,4 @@
+/* global process */
 /**
  * 部署脚本工具函数回归测试
  *
@@ -48,7 +49,6 @@ test('L1-22: 只把指向本项目产物的进程判为「我们的」', () => {
     `"C:\\Program Files\\nodejs\\node.exe" ${join(APP_SERVER, 'dist', 'main.js')}`,
     `node ${join(SCRIPTS, 'gateway.mjs')} --port 18080`,
     `nginx.exe -p ${NGINX_PREFIX}`,
-    'node dist/main.js', // 相对路径启动的兜底
   ];
   for (const cmd of ours) {
     assert.equal(isOurServiceCmd(cmd), true, `应判为本项目进程：${cmd}`);
@@ -57,6 +57,8 @@ test('L1-22: 只把指向本项目产物的进程判为「我们的」', () => {
   // 这些命令行只是「提到了仓库路径」，绝不是本项目的服务进程。
   // 旧实现用 /scienceing/ 匹配会把它们全部强杀。
   const notOurs = [
+    'node dist/main.js', // 相对路径无法确认项目归属
+    'nginx.exe -p D:\\another-project\\nginx-prefix',
     '"C:\\Program Files\\Microsoft VS Code\\Code.exe" D:\\studyspace\\scienceing-account-manager',
     'bash.exe -lc cd /d/studyspace/scienceing-account-manager && pnpm lint',
     'node.exe D:\\studyspace\\scienceing-account-manager\\scripts\\dev.mjs --only=web',

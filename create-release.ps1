@@ -1,19 +1,31 @@
 ﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Tag,
-    [string]$LanGitPath = 'E:\git-local-share\scienceing.git',
-    [string]$OutputDirectory = 'E:\git-local-share\releases',
-    [switch]$SkipTests
+    [string]$LanGitPath,
+    [string]$OutputDirectory = (Join-Path $env:USERPROFILE 'Downloads\scienceing-releases'),
+    [switch]$SkipTests,
+    [string]$CloudHost,
+    [string]$ExtensionKeyPath
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'deploy-lan\scripts\release-common.ps1')
 
+if ([bool]$CloudHost -ne [bool]$ExtensionKeyPath) { throw 'CloudHost 与 ExtensionKeyPath 必须同时指定' }
+if ($CloudHost -and ($CloudHost -notmatch '^[a-zA-Z0-9.-]+$' -or ([uri]"https://$CloudHost").Host -ne $CloudHost)) { throw 'CloudHost 必须是裸域名或 IP 地址' }
+if ($ExtensionKeyPath) {
+    $ExtensionKeyPath = [System.IO.Path]::GetFullPath($ExtensionKeyPath)
+    $releaseOutput = [System.IO.Path]::GetFullPath($OutputDirectory).TrimEnd('\') + '\'
+    if ($ExtensionKeyPath.StartsWith($releaseOutput, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw '扩展私钥必须位于发布输出目录之外'
+    }
+}
+
 if ($Tag -notmatch '^v\d+\.\d+\.\d+$') {
     throw "正式版本 Tag 必须符合 vX.Y.Z：$Tag"
 }
-if (-not (Test-Path -LiteralPath (Join-Path $LanGitPath 'HEAD'))) {
+if ($LanGitPath -and -not (Test-Path -LiteralPath (Join-Path $LanGitPath 'HEAD'))) {
     throw "LAN bare Git 不存在：$LanGitPath"
 }
 
@@ -39,9 +51,11 @@ function Copy-DirectoryContents {
 
 $commit = Read-GitValue -Arguments @('rev-list', '-n', '1', "$Tag^{commit}")
 if ($commit -notmatch '^[0-9a-f]{40}$') { throw "Tag 无法解析为 commit：$Tag" }
-$lanCommit = Read-GitValue -Arguments @("--git-dir=$LanGitPath", 'rev-list', '-n', '1', "$Tag^{commit}")
-if ($lanCommit -ne $commit) {
-    throw "LAN Git 中的 $Tag 与本地不一致或尚未推送。先执行：git push lan $Tag"
+if ($LanGitPath) {
+    $lanCommit = Read-GitValue -Arguments @("--git-dir=$LanGitPath", 'rev-list', '-n', '1', "$Tag^{commit}")
+    if ($lanCommit -ne $commit) {
+        throw "LAN Git 中的 $Tag 与本地不一致或尚未推送。先执行：git push lan $Tag"
+    }
 }
 
 [void](New-Item -ItemType Directory -Path $OutputDirectory -Force)
@@ -106,6 +120,7 @@ try {
             'apps\server\dist\db\config.test.js',
             'apps\server\dist\db\migrate.test.js',
             'apps\server\dist\db\backup.test.js',
+            'apps\server\dist\db\upgrade.test.js',
             'apps\server\dist\db\seed.test.js'
         ) | ForEach-Object { Join-Path $sourceRoot $_ }
         Invoke-NativeChecked -Command $node -Arguments (@('--test', '--test-isolation=none') + $serverTests) -WorkingDirectory $sourceRoot
@@ -139,6 +154,25 @@ try {
         Copy-Item -LiteralPath (Join-Path $workerDeploy $name) -Destination $bundleWorker -Recurse -Force
     }
     Copy-DirectoryContents -Source (Join-Path $sourceRoot 'apps\web\dist') -Destination (Join-Path $bundleRoot 'apps\web\dist')
+    if ($CloudHost) {
+        Invoke-NativeChecked -Command $node -Arguments @(
+            (Join-Path $sourceRoot 'deploy-cloud\scripts\patch-extension.mjs'),
+            '--host', $CloudHost, '--key-file', $ExtensionKeyPath,
+            '--source', (Join-Path $sourceRoot 'apps\extension'),
+            '--output', (Join-Path $bundleRoot 'apps\web\dist\downloads')
+        ) -WorkingDirectory $sourceRoot
+        foreach ($directory in @('scripts', 'nginx')) {
+            Copy-DirectoryContents -Source (Join-Path $sourceRoot "deploy-cloud\$directory") -Destination (Join-Path $bundleRoot "deploy-cloud\$directory")
+        }
+        foreach ($name in @('Dockerfile', 'docker-compose.yml', 'README.md')) {
+            Copy-Item -LiteralPath (Join-Path $sourceRoot "deploy-cloud\$name") -Destination (Join-Path $bundleRoot "deploy-cloud\$name") -Force
+        }
+        # Windows 检出可能带 CRLF；Linux 发布入口必须使用 LF，且保持 Tag 中的内容。
+        foreach ($script in (Get-ChildItem -LiteralPath (Join-Path $bundleRoot 'deploy-cloud\scripts') -Filter '*.sh' -File)) {
+            $text = [System.IO.File]::ReadAllText($script.FullName).Replace("`r`n", "`n")
+            [System.IO.File]::WriteAllText($script.FullName, $text, (New-Object System.Text.UTF8Encoding($false)))
+        }
+    }
     foreach ($relative in @('manifest.json', 'package.json', 'src', 'scripts')) {
         $destination = Join-Path $bundleRoot 'apps\extension'
         [void](New-Item -ItemType Directory -Path $destination -Force)
@@ -148,7 +182,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'deploy-lan\config.env') -Destination (Join-Path $bundleRoot 'deploy-lan\config.env') -Force
 
     # 生产机一键运维入口随包分发：即便生产机没有 git 工作区，也能在 Release 目录直接部署
-    foreach ($name in @('deploy-release.ps1', 'sync-from-dev.ps1', 'deploy-prod.bat')) {
+    foreach ($name in @('deploy-release.ps1', 'sync-from-dev.ps1', 'deploy-prod.bat', 'deploy.cmd', 'DEPLOYMENT.md')) {
         $source = Join-Path $sourceRoot $name
         if (Test-Path -LiteralPath $source) {
             Copy-Item -LiteralPath $source -Destination (Join-Path $bundleRoot $name) -Force
@@ -163,6 +197,11 @@ try {
         version = $Tag
         commit = $commit
         schemaVersion = [int]$schemaVersionText
+    }
+    if ($CloudHost) {
+        $extension = Get-Content -LiteralPath (Join-Path $bundleRoot 'apps\web\dist\downloads\extension.json') -Raw | ConvertFrom-Json
+        $release.cloudHost = $CloudHost
+        $release.extensionId = $extension.extensionId
     }
     $utf8 = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText((Join-Path $bundleRoot 'release.json'), ($release | ConvertTo-Json) + "`n", $utf8)
@@ -179,7 +218,7 @@ try {
         $_.Name -match '^\.env($|\.)' -or
         $_.Name -match '^\.npmrc$' -or                              # 可能含 registry token / 私服凭据
         $_.Name -match '^id_(rsa|dsa|ecdsa|ed25519)(\.|$)' -or       # SSH 私钥
-        $_.Name -match '\.(db|db-wal|db-shm|db-journal|log|bak|backup|secret|pem|pfx|p12|key)$' -or
+        $_.Name -match '\.(db|sqlite|sqlite3)([-.].*)?$|\.(log|bak|backup|secret|pem|pfx|p12|key)$' -or
         $relative -match '(^|\\)(logs?|backups?|secrets?)(\\|$)' -or
         # playwright/.auth 里是**已登录的管理员会话**（含 cookie/localStorage）：
         # 随包发出等于把科应后台的登录态一并交出去。

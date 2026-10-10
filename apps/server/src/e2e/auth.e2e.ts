@@ -17,6 +17,7 @@ let app: INestApplication;
 let dbService: DatabaseService;
 
 before(async () => {
+  process.env.NODE_ENV = 'test';
   process.env.DATABASE_PATH = ':memory:';
   // verify-password / reset-password 的 HMAC 票据依赖 master key：固定值保证 sign/verify 一致
   process.env.SCIENCEING_MASTER_KEY = MASTER_KEY_HEX;

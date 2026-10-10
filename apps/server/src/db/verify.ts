@@ -2,13 +2,13 @@ import { DatabaseSync } from 'node:sqlite';
 import { loadMasterKey } from '../crypto/master-key';
 import { defaultDatabasePath } from './config';
 import { CURRENT_SCHEMA_VERSION } from './migrations';
+import { assertMigrationState } from './migrate';
 import { assertPasswordsReadable } from './seed';
 
 export function verifyProductionDatabase(path = defaultDatabasePath()): number {
   const db = new DatabaseSync(path, { readOnly: true });
   try {
-    const check = db.prepare('PRAGMA quick_check').get() as { quick_check: string } | undefined;
-    if (check?.quick_check !== 'ok') throw new Error(`SQLite quick_check 失败：${check?.quick_check ?? '无结果'}`);
+    assertMigrationState(db);
     const row = db.prepare('SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations').get() as {
       version: number;
     };

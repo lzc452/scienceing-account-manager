@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DatabaseService } from '../../db/database.service';
 import { nowIso } from '../../db/config';
+import { isDeploymentVerification } from '../../lib/deploy-verification';
 import {
   MANUAL_DEFAULT_CONTENT,
   MANUAL_DEFAULT_SLUG,
@@ -44,6 +45,7 @@ export class ManualService implements OnModuleInit {
    * 用 INSERT OR IGNORE：管理员已改过的内容不会被覆盖。
    */
   onModuleInit(): void {
+    if (isDeploymentVerification()) return;
     this.ensureSeedRow();
   }
 

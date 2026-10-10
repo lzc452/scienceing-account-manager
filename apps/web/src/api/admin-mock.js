@@ -1,5 +1,7 @@
 import { reactive } from 'vue'
 import { ACTION_LABELS } from '@/lib/audit-labels'
+/* global setTimeout */
+import { authState } from './index'
 
 /**
  * 管理后台内存 mock 后端（t8）。真实联调时由 admin.js 切到 fetch。
@@ -106,6 +108,16 @@ function accountOf(id) {
   const account = state.accounts.find((a) => a.id === Number(id))
   if (!account) throw httpError('账号不存在', 404)
   return account
+}
+
+async function accountPassword(id) {
+  await delay()
+  if (!authState.user) throw httpError('未登录', 401)
+  if (authState.user.role !== 'ADMIN') throw httpError('仅管理员可查看密码', 403)
+  const account = accountOf(id)
+  if (account.passwordProvisioned === false) throw httpError('账号尚未配置密码', 409)
+  state.logs.unshift({ id: Date.now(), userId: authState.user.id, accountId: account.id, action: 'ADMIN_PASSWORD_REVEAL', result: 'SUCCESS', createdAt: new Date().toISOString(), metadata: {} })
+  return { accountId: account.id, password: 'demo-placeholder' }
 }
 
 async function forceRelease(id) {
@@ -601,6 +613,7 @@ async function getDashboardStats(days = 30) {
 }
 
 export const adminMockApi = {
+  accountPassword,
   listAccounts,
   forceRelease,
   resetPassword,

@@ -14,7 +14,7 @@ import {
 import { openDatabase } from './connection';
 import { millisecondsUntilNextTwoAm } from './backup-scheduler.service';
 
-test('在线 WAL 数据库快照包含尚未 checkpoint 的数据', () => {
+test('在线 WAL 数据库快照包含尚未 checkpoint 的数据', async () => {
   const root = mkdtempSync(join(tmpdir(), 'scienceing-backup-'));
   const source = join(root, 'legacy.db');
   const target = join(root, 'scienceing.prod.db');
@@ -22,7 +22,7 @@ test('在线 WAL 数据库快照包含尚未 checkpoint 的数据', () => {
   try {
     db.exec('PRAGMA wal_autocheckpoint=0; CREATE TABLE values_table(value TEXT);');
     db.prepare('INSERT INTO values_table(value) VALUES (?)').run('from-wal');
-    importDatabase(source, target);
+    await importDatabase(source, target);
     const imported = new DatabaseSync(target, { readOnly: true });
     try {
       assert.equal((imported.prepare('SELECT value FROM values_table').get() as { value: string }).value, 'from-wal');
@@ -35,17 +35,17 @@ test('在线 WAL 数据库快照包含尚未 checkpoint 的数据', () => {
   }
 });
 
-test('备份保留 30 天且可恢复为一致数据库', () => {
+test('备份保留 30 天且可恢复为一致数据库', async () => {
   const root = mkdtempSync(join(tmpdir(), 'scienceing-restore-'));
   const backups = join(root, 'backups');
   const target = join(root, 'scienceing.prod.db');
   const db = openDatabase(target);
   try {
     db.exec('CREATE TABLE sample(value TEXT); INSERT INTO sample VALUES (\'before\');');
-    const backup = createDatabaseBackup(db, backups, 'predeploy', new Date('2026-09-08T01:00:00Z'));
+    const backup = await createDatabaseBackup(db, backups, 'predeploy', new Date('2026-09-08T01:00:00Z'));
     db.exec("UPDATE sample SET value='after'");
     db.close();
-    restoreDatabase(backup.path, target, new Date('2026-09-08T02:00:00Z'));
+    await restoreDatabase(backup.path, target, new Date('2026-09-08T02:00:00Z'));
     const restored = new DatabaseSync(target, { readOnly: true });
     try {
       assert.equal((restored.prepare('SELECT value FROM sample').get() as { value: string }).value, 'before');
@@ -54,7 +54,7 @@ test('备份保留 30 天且可恢复为一致数据库', () => {
     }
 
     const reopened = openDatabase(target);
-    const old = createDatabaseBackup(reopened, backups, 'daily', new Date('2026-08-01T00:00:00Z')).path;
+    const old = (await createDatabaseBackup(reopened, backups, 'daily', new Date('2026-08-01T00:00:00Z'))).path;
     reopened.close();
     const oldTime = new Date('2026-08-01T00:00:00Z');
     utimesSync(old, oldTime, oldTime);

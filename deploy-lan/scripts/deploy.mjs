@@ -15,7 +15,7 @@
  *   build             只构建不启动（server/web/worker + 扩展 zip）
  *   nginx:test        测试隔离 nginx 实例配置（含输出）
  *   extension:pack    仅把扩展替换为 LAN 地址并打包 zip
- *   db:doctor         数据库结构体检/自愈（直接解析源码迁移，dist 旧也能补齐表/列）
+ *   db:doctor         只读结构、版本、校验值检查（禁止自动补结构）
  *   db:reset-admin    把 admin 口令重置为仓库 .env 的 ADMIN_INITIAL_PASSWORD
  *   env:print         打印解析后的关键环境配置（不含密码明文以外的敏感值结构）
  *   env:init          生成/补全仓库根 .env 模板（新电脑首选；不覆盖已有值；master key 与 admin 初始口令均随机生成）
@@ -41,7 +41,7 @@ import { ensureNginxPrefix, nginxTest, nginxStart, nginxVersion } from './nginx-
 
 async function resolveRuntime() {
   const nodeBin = findNodeBin();
-  if (!nodeBin) die('未找到可用的 Node.js（需 >= 22.5 且内置 node:sqlite）。\n  请安装 Node 24，或把 deploy-lan/config.env 的 NODE_BIN 指到 node.exe 绝对路径。');
+  if (!nodeBin) die('未找到可用的 Node.js（需 >= 22.16 且支持 SQLite Backup API）。\n  请使用 Node 24，或把 NODE_BIN 指到 node.exe 绝对路径。');
   if (!existsSync(ENV_FILE)) {
     log('⚠ 仓库根缺少 .env（git clone 不会带 .env）。建议先执行：node deploy-lan/scripts/deploy.mjs env:init');
     log('  然后用编辑器打开 .env 填写科应凭据后重新部署（详见 README「新电脑首次部署」）。');
@@ -89,6 +89,7 @@ async function stopBackend({ backendPort, force = false }) {
   let pid = readJson(pidFile);
   let stopped = false;
   if (pid && (await processAlive(pid.pid))) {
+    if (!isOurServiceCmd(await processCmdline(pid.pid))) die(`PID 文件指向非本项目进程：${pid.pid}，拒绝结束`);
     log(`停止后端（pid ${pid.pid}，来自 pid 文件）…`);
     await killPid(pid.pid);
     stopped = true;
@@ -108,8 +109,9 @@ async function stopBackend({ backendPort, force = false }) {
         `  如确认要结束请加 --force；或修改仓库 .env 的 PORT 换端口。`);
     }
   }
-  if (pid) tryRm(pidFile);
   for (let i = 0; i < 20 && !(await isPortFree(backendPort)); i++) await sleep(200);
+  if (!(await isPortFree(backendPort)) || (pid && await processAlive(pid.pid))) die('后端未完全停止，禁止备份恢复或迁移');
+  if (pid) tryRm(pidFile);
   return stopped;
 }
 
@@ -148,14 +150,17 @@ async function stopGateway({ gatewayPort, nginxExe, force = false }) {
   // 1) 先按 pid 文件停 node 网关
   const pid = readJson(NODE_GATEWAY_PID);
   if (pid && (await processAlive(pid.pid))) {
+    if (!isOurServiceCmd(await processCmdline(pid.pid))) die(`PID 文件指向非本项目进程：${pid.pid}，拒绝结束`);
     log(`停止 node 网关（pid ${pid.pid}）…`);
     await killPid(pid.pid);
-    tryRm(NODE_GATEWAY_PID);
+    if (await processAlive(pid.pid)) die('node 网关未完全停止，禁止继续部署');
   }
+  if (pid) tryRm(NODE_GATEWAY_PID);
   // 2) 回收所有“本项目隔离 nginx”进程（按命令行特征，覆盖无端口/僵尸 master）
   try {
     const rows = await psList(`Get-CimInstance Win32_Process -Filter "Name='nginx.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'nginx-prefix' } | Select-Object ProcessId,CommandLine`);
     for (const row of rows || []) {
+      if (!isOurServiceCmd(row.CommandLine)) continue;
       log(`停止隔离 nginx 实例（pid ${row.ProcessId}）…`);
       await killPid(Number(row.ProcessId));
     }
@@ -165,14 +170,17 @@ async function stopGateway({ gatewayPort, nginxExe, force = false }) {
   if (owner) {
     const cmd = await processCmdline(owner);
     const isOurNginx = isOurServiceCmd(cmd);
-    if (isOurNginx || /nginx\.exe/i.test(cmd || '') || force) {
-      log(`停止网关端口 ${gatewayPort} 占用进程（pid ${owner}，${isOurNginx ? '本项目 nginx' : 'nginx/force'}）…`);
+    if (isOurNginx || force) {
+      log(`停止网关端口 ${gatewayPort} 占用进程（pid ${owner}，${isOurNginx ? '本项目服务' : '--force'}）…`);
       if (nginxExe && /nginx\.exe/i.test(cmd || '')) {
         spawnSync(nginxExe, ['-s', 'quit', '-p', NGINX_PREFIX, '-c', join(NGINX_PREFIX, 'conf', 'nginx.conf')], { encoding: 'utf8', timeout: 8000, windowsHide: true });
         await sleep(1200);
       }
       const still = await pidOnPort(gatewayPort);
-      if (still) await killPid(still);
+      if (still) {
+        if (!force && !isOurServiceCmd(await processCmdline(still))) die(`网关端口 ${gatewayPort} 已被其他进程接管，禁止结束`);
+        await killPid(still);
+      }
     } else {
       die(`网关端口 ${gatewayPort} 被其它程序占用（pid ${owner}），请换 GATEWAY_PORT 或 --force`);
     }
@@ -182,8 +190,7 @@ async function stopGateway({ gatewayPort, nginxExe, force = false }) {
     if (await isPortFree(gatewayPort)) return true;
     await sleep(200);
   }
-  log(`⚠ 网关端口 ${gatewayPort} 未能释放（仍有进程占用），继续尝试启动。`);
-  return true;
+  die(`网关端口 ${gatewayPort} 未能释放，禁止继续部署`);
 }
 
 /** 列出进程（psJson 的便捷封装，返回数组）。 */
@@ -448,41 +455,18 @@ async function buildWorker({ nodeBin }) {
  * 为什么需要：dist/ 与 node_modules/ 都在 .gitignore 中，通过 git 同步到生产机只带源码。
  * 若生产机没重新编译就启动旧 dist，migrate() 只会跑到旧版本，新功能的表/列永远不创建
  * （表现为"代码是新的，功能却不生效"，如 t14 首次登录强制改密依赖 users.must_change_password）。
- * db-doctor 直接解析源码迁移 SQL 做幂等补齐，不依赖编译产物，因此作为最后一道防线。
+ * 只验证迁移记录、结构、完整性及密钥，结构修改只能在部署迁移步骤进行。
  */
 async function ensureSchema({ nodeBin }) {
-  if (!existsSync(DB_FILE)) {
-    log('数据库尚不存在，跳过结构自检（本次部署会初始化）');
-    return;
-  }
-  section('数据库结构自检（db-doctor）');
-  const script = join(REPO_ROOT, 'deploy-lan', 'scripts', 'db-doctor.mjs');
-  const r = spawnSync(nodeBin, [script, '--fix', '--quiet'], {
-    cwd: REPO_ROOT, env: productionEnv(), encoding: 'utf8', windowsHide: true,
-  });
-  const out = `${r.stdout || ''}${r.stderr || ''}`.trim();
-  if (r.status !== 0) {
-    die(`数据库结构自检/修复失败（退出码 ${r.status}）：\n${out || '（无输出）'}`);
-  }
-  if (out) log(out.replace(/^\[db-doctor\]\s*/, ''));
-
-  // 迁移数量对比：源码比 dist 多 ⇒ 产物是旧的（库结构虽已补齐，运行逻辑仍旧）
-  const countMigrations = (dir, ext) => (existsSync(dir)
-    ? readdirSync(dir).filter((f) => new RegExp(`^\\d+_.*\\.${ext}$`).test(f)).length
-    : 0);
-  const srcCount = countMigrations(join(APP_SERVER, 'src', 'db', 'migrations'), 'ts');
-  const distCount = countMigrations(join(APP_SERVER, 'dist', 'db', 'migrations'), 'js');
-  if (srcCount > distCount) {
-    log(`⚠ 后端编译产物落后于源码（源码迁移 ${srcCount} 个 / dist ${distCount} 个）。`);
-    log('  库结构已由 db-doctor 补齐，但运行的代码仍是旧版本 → 请执行 build / deploy 重新编译后端。');
-  }
+  section('只读验证数据库版本、校验值、结构和完整性');
+  await run(nodeBin, [join(APP_SERVER, 'dist', 'db', 'verify.js')], { cwd: APP_SERVER, env: productionEnv() });
 }
 
 async function setupDatabase({ nodeBin, seed = false }) {
   section(seed ? '数据库迁移与首次初始化种子' : '数据库迁移');
   mkdirSync(dirname(DB_FILE), { recursive: true });
   const env = productionEnv();
-  await run(nodeBin, [join(APP_SERVER, 'dist', 'db', 'migrate.js')], { cwd: APP_SERVER, env });
+  await run(nodeBin, [join(APP_SERVER, 'dist', 'db', 'migrate.js'), ...(seed ? ['--initialize'] : [])], { cwd: APP_SERVER, env });
   if (seed) await run(nodeBin, [join(APP_SERVER, 'dist', 'db', 'seed.js')], { cwd: APP_SERVER, env });
   log(seed ? '数据库迁移/首次种子完成' : '数据库迁移完成');
 }
@@ -679,6 +663,7 @@ async function cmdStatus() {
 // ───────────────────────── 子命令实现 ─────────────────────────
 
 async function fullDeploy({ nodeBin, cfg, backendPort, gatewayPort, lan, force = false, initialize = false }) {
+  if (initialize && existsSync(DB_FILE)) die('生产数据库已存在，禁止 --initialize 或种子初始化');
   const startedAt = Date.now();
   log('');
   log(`部署目标：看板 http://${lan.ip}:${gatewayPort}/   API http://${lan.ip}:${backendPort}/api`);
@@ -795,8 +780,8 @@ async function runDatabaseCli(scriptName, argv) {
   await run(rt.nodeBin, [script, ...argv], { cwd: APP_SERVER, env: productionEnv() });
 }
 
-async function cmdDbMigrate() {
-  await runDatabaseCli('migrate.js', []);
+async function cmdDbMigrate(argv) {
+  await runDatabaseCli('migrate.js', argv);
 }
 
 async function cmdDbSeed() {
@@ -819,7 +804,7 @@ async function cmdDbVerify() {
   await runDatabaseCli('verify.js', []);
 }
 
-/** 数据库结构体检/自愈（解析源码迁移，不依赖 dist）：db:doctor [--fix] [--database <path>] … */
+/** 数据库只读检查：db:doctor [--database <path>] [--json]。 */
 async function cmdDbDoctor(argv) {
   const rt = await resolveRuntime();
   const script = join(REPO_ROOT, 'deploy-lan', 'scripts', 'db-doctor.mjs');

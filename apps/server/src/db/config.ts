@@ -1,4 +1,5 @@
-import { basename, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
 
 export function nowIso(): string {
   return new Date().toISOString();
@@ -16,23 +17,35 @@ export function assertDatabasePathForEnvironment(path: string, environment: Data
   }
 }
 
-/**
- * 默认数据库路径严格按环境隔离：开发使用 scienceing.dev.db，生产使用 scienceing.prod.db。
- * 编译产物位于 apps/server/dist/db，`__dirname` 上溯 4 级即仓库根。
- * 可用 DATABASE_PATH 环境变量覆盖（测试用临时库）。
- */
+export function assertExternalDatabasePath(path: string): void {
+  const applicationRoot = resolve(__dirname, '..', '..', '..', '..');
+  const local = relative(applicationRoot, path);
+  if (!isAbsolute(path) || (local !== '..' && !local.startsWith(`..${sep}`) && !isAbsolute(local))) {
+    throw new Error('DATABASE_PATH 必须是应用发布目录之外的绝对路径');
+  }
+}
+
+function runtimeDirectory(): string {
+  const environment = process.env.NODE_ENV === 'production' ? 'production' : 'development';
+  return resolve((environment === 'production' ? process.env.SCIENCEING_RUNTIME_DIR : process.env.SCIENCEING_DEV_DIR)
+    ?? resolve(process.env.LOCALAPPDATA ?? homedir(), 'scienceing-account-manager', environment));
+}
+
+/** 数据目录独立于代码，按环境隔离；测试可以使用临时库。 */
 export function defaultDatabasePath(): string {
   const environment = process.env.NODE_ENV === 'production' ? 'production' : 'development';
   const expectedSuffix = environment === 'production' ? '.prod.db' : '.dev.db';
   const configured = process.env.DATABASE_PATH;
-  const path = configured
-    ?? resolve(__dirname, '..', '..', '..', '..', 'data', `scienceing${expectedSuffix}`);
+  const path = configured ?? resolve(runtimeDirectory(), 'data', `scienceing${expectedSuffix}`);
 
-  if (process.env.NODE_ENV !== 'test') assertDatabasePathForEnvironment(path, environment);
+  if (process.env.NODE_ENV !== 'test') {
+    assertDatabasePathForEnvironment(path, environment);
+    assertExternalDatabasePath(path);
+  }
   return path;
 }
 
 export function defaultBackupDirectory(): string {
   return process.env.SCIENCEING_BACKUP_DIR
-    ?? resolve(__dirname, '..', '..', '..', '..', 'backups');
+    ?? resolve(runtimeDirectory(), 'backups');
 }

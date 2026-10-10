@@ -1,5 +1,5 @@
 <script setup>
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Check, Copy, Eye, EyeOff } from 'lucide-vue-next'
 import { cn } from '@/lib/utils'
 
@@ -12,13 +12,12 @@ const COPIED_TIMEOUT_MS = 6_000
  * 默认遮蔽；显示后 30s 自动重新遮蔽；复制后 6s 显示「已复制 ✓」。
  * 显示 / 复制动作通过事件上抛（用于审计，不携带密码本体）。
  *
- * 显示按钮是**规范要求**，不要移除：PRODUCT-DESIGN §4.3 明确
- * 「`显示` 按钮：点击后显示明文，30 秒后自动重新遮蔽；遮蔽/显示状态在按钮文本上同步
- *（显示 ⇄ 隐藏），不使用纯图标」。此前该按钮被整段注释掉，导致 visible / scheduleMask /
- * REVEAL_TIMEOUT_MS / reveal 事件与 Eye 图标全部不可达，界面退化为「只能复制、永远遮蔽」。
+ * 普通用户只复制；管理员调用方显式启用查看，服务端另行校验管理员权限。
  */
 const props = defineProps({
   password: { type: String, required: true },
+  canReveal: { type: Boolean, default: false },
+  initiallyVisible: { type: Boolean, default: false },
   class: { type: [String, Object, Array], default: undefined },
 })
 
@@ -45,6 +44,7 @@ function clearMask() {
 }
 
 function toggle() {
+  if (!props.canReveal) return
   visible.value = !visible.value
   if (visible.value) {
     emit('reveal')
@@ -69,14 +69,27 @@ async function copy() {
 }
 
 watch(
-  () => props.password,
+  () => [props.password, props.canReveal],
   () => {
     visible.value = false
     clearMask()
   },
 )
 
+onMounted(() => {
+  if (props.canReveal && props.initiallyVisible) toggle()
+  document.addEventListener('visibilitychange', maskWhenHidden)
+})
+
+function maskWhenHidden() {
+  if (document.hidden) {
+    visible.value = false
+    clearMask()
+  }
+}
+
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', maskWhenHidden)
   clearMask()
   if (copyTimer !== undefined) window.clearTimeout(copyTimer)
 })
@@ -87,10 +100,11 @@ onBeforeUnmount(() => {
     <code
       class="min-w-0 flex-1 truncate rounded-2xl bg-canvas px-3 py-2 text-sm text-ink tabular-nums"
     >
-      {{ visible ? password : MASK }}
+      {{ canReveal && visible ? password : MASK }}
     </code>
 
     <button
+      v-if="canReveal"
       type="button"
       class="inline-flex h-8 shrink-0 items-center gap-1 rounded-2xl border border-hairline bg-transparent px-2.5 text-xs font-medium text-ink transition-colors hover:bg-surface-alt"
       :aria-label="visible ? '隐藏密码' : '显示密码'"

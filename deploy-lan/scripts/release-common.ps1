@@ -1,6 +1,11 @@
 ﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Node / Codex 从 PowerShell 7 启动 5.1 时可能继承不兼容模块路径。
+if ($PSVersionTable.PSVersion.Major -eq 5) {
+    $env:PSModulePath = (Join-Path $PSHOME 'Modules') + ';' + $env:PSModulePath
+}
+
 function Invoke-NativeChecked {
     param(
         [Parameter(Mandatory = $true)][string]$Command,
@@ -104,7 +109,7 @@ function Get-ReleaseNode {
     try {
         [System.IO.File]::WriteAllText(
             $probe,
-            "import('node:sqlite').then(() => process.exit(0), () => process.exit(1));",
+            "import('node:sqlite').then(m => process.exit(typeof m.backup === 'function' ? 0 : 1), () => process.exit(1));",
             (New-Object System.Text.UTF8Encoding($false)))
     }
     catch {
@@ -124,18 +129,18 @@ function Get-ReleaseNode {
             if ($LASTEXITCODE -ne 0 -or $version -notmatch '^v(\d+)\.(\d+)') { continue }
             $major = [int]$Matches[1]
             $minor = [int]$Matches[2]
-            if ($major -lt 22 -or ($major -eq 22 -and $minor -lt 5)) { continue }
+            if ($major -lt 22 -or ($major -eq 22 -and $minor -lt 16)) { continue }
             if ($probe) {
                 & $candidate $probe 2>$null
             }
             else {
-                & $candidate -e "import('node:sqlite').then(()=>process.exit(0),()=>process.exit(1))" 2>$null
+                & $candidate -e "import('node:sqlite').then(m=>process.exit(typeof m.backup==='function'?0:1),()=>process.exit(1))" 2>$null
             }
             if ($LASTEXITCODE -eq 0) { return [string]$candidate }
         }
         catch { }
     }
-    throw '未找到 Node.js >= 22.5 且支持 node:sqlite 的 node.exe；推荐安装 Node 24。'
+    throw '未找到 Node.js >= 22.16 且支持 SQLite Backup API 的 node.exe；可使用免安装 Node 24。'
 }
 
 function Test-PnpmUsable {
@@ -154,9 +159,9 @@ function Test-PnpmUsable {
 # 解析最新 Release 版本：取开发机共享目录 releases\ 下 semver 最大的 scienceing-vX.Y.Z.zip。
 # 生产机无需知道版本号，直接运行 deploy-prod.bat 即可升级到最新正式版。
 function Resolve-LatestReleaseTag {
-    param([Parameter(Mandatory = $true)][string]$ShareRoot)
+    param([string]$ShareRoot, [string]$ReleaseDirectory)
 
-    $releasesDir = Join-Path $ShareRoot 'releases'
+    $releasesDir = if ($ReleaseDirectory) { $ReleaseDirectory } else { Join-Path $ShareRoot 'releases' }
     if (-not (Test-Path -LiteralPath $releasesDir)) {
         throw "共享目录缺少 releases：$releasesDir（请先在开发机执行 .\make-release.ps1）"
     }

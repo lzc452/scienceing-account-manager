@@ -5,7 +5,7 @@
  *
  * 编排顺序（每步都可跳过/单跑，见文末 CLI 参数）：
  *   1. 环境预检（Node 版本 + node:sqlite 可用性）
- *   2. 依赖安装（node_modules 缺失时才执行）
+ *   2. 依赖安装（按哨兵校验完整性，残缺时自愈重装）
  *   3. 环境变量（生成并持久化 .env / .env.local）
  *   4. 生成可下载的浏览器扩展 ZIP
  *   5. 编译后端（dist 过期或缺失时才执行）
@@ -33,6 +33,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, statSync, writeFileSync, readdirSync, rmSync } from 'node:fs'
 import { createConnection } from 'node:net'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -47,9 +48,10 @@ const SERVER_DIR = join(ROOT, 'apps', 'server')
 const WEB_DIR = join(ROOT, 'apps', 'web')
 const SERVER_DIST = join(SERVER_DIR, 'dist')
 const SERVER_MAIN = join(SERVER_DIST, 'main.js')
-const DB_DIR = join(ROOT, 'data')
+const DB_DIR = resolve(process.env.SCIENCEING_DEV_DIR
+  ?? join(process.env.LOCALAPPDATA ?? homedir(), 'scienceing-account-manager', 'development'), 'data')
 const DB_FILE = join(DB_DIR, 'scienceing.dev.db')
-const LEGACY_DB_FILE = join(DB_DIR, 'scienceing.db')
+const LEGACY_DB_FILE = join(ROOT, 'data', 'scienceing.dev.db')
 const ENV_FILE = join(ROOT, '.env')
 const WEB_ENV_LOCAL = join(WEB_DIR, '.env.local')
 
@@ -88,7 +90,7 @@ if (flags.help) {
   pnpm dev                 装依赖 → 生成 .env → 打包扩展 → 编译 → 迁移 → 种子 → 后端 + 前端
   pnpm dev --only=server   只启动后端（:3000/api）
   pnpm dev --only=web      只启动前端（:5173，需后端已运行）
-  pnpm dev --reset         删除 data/scienceing.dev.db 后重建（迁移 + 种子）
+  pnpm dev --reset         删除独立开发目录中的 scienceing.dev.db 后重建（迁移 + 种子）
   pnpm dev --rebuild       强制重新编译后端
   pnpm dev --reset-admin   把 admin 口令强制重置为 .env 中的 ADMIN_INITIAL_PASSWORD
   pnpm dev --no-install    跳过依赖检查（node_modules 已就绪时更快）
@@ -212,42 +214,117 @@ async function checkRuntime() {
 
   const major = Number(process.versions.node.split('.')[0])
   info(`Node ${process.versions.node}（${process.platform}）`)
-  if (major < 20) {
-    throw new Error(`需要 Node.js >= 20（package.json engines），当前 ${process.versions.node}`)
+  if (major < 22) {
+    throw new Error(`需要 Node.js >= 22.16（package.json engines），当前 ${process.versions.node}`)
   }
 
-  // node:sqlite 在 22.5+ 才无需 flag；Node 20/21 直接不可用
+  // 原生 Backup API 需要 Node 22.16+。
   try {
-    await import('node:sqlite')
+    const sqlite = await import('node:sqlite')
+    if (typeof sqlite.backup !== 'function') throw new Error('缺少 SQLite Backup API')
     info('node:sqlite 可用')
   } catch (error) {
     throw new Error(
       `当前 Node 不支持内置 node:sqlite（${error.code ?? error.message}）。\n` +
-        '  请升级到 Node.js >= 22.5（推荐 24，本项目在该版本开发验证），\n' +
-        '  或 Node 22 早期版本改用 --experimental-sqlite 启动后端。',
+        '  请使用 Node.js >= 22.16（推荐免安装 Node 24）。',
     )
   }
 }
 
 // ───────────────────── 2. 依赖安装 ─────────────────────
 
+function hasFile(...segments) {
+  return existsSync(join(...segments))
+}
+
+/** 前端 vite 的 bin 垫片（Windows 上 pnpm 生成 .CMD，POSIX 上无扩展名） */
+function hasWebBin(name) {
+  const binDir = join(WEB_DIR, 'node_modules', '.bin')
+  return [`${name}.CMD`, `${name}.ps1`, name].some((file) => existsSync(join(binDir, file)))
+}
+
+/**
+ * 依赖完整性哨兵。
+ *
+ * 只判断 node_modules 目录「存在」是不够的：`pnpm install --prod`（或生产模式安装）会把
+ * devDependencies 从 node_modules 里整体剔除，目录却依然在。旧的检查因此打印
+ * 「node_modules 已就绪，跳过安装」，把问题推到几十行之后，表现为
+ * `'vite' 不是内部或外部命令` 这种看不出根因的报错——2026-09-12 就是这样坏的。
+ *
+ * 更麻烦的是这种残缺**不会自愈**：pnpm 的「快速路径」只看 manifest 时间戳，
+ * 不核对 node_modules 的实际内容，于是永远回「Already up to date」——
+ * 连 `--force` 也一样。必须清掉状态缓存才会真正重装，详见 PNPM_STATE_FILES。
+ *
+ * 哨兵只取「真会被用到」的产物，覆盖根 / 后端 / 前端三处 devDeps，避免误判。
+ */
+const DEPENDENCY_SENTINELS = [
+  { label: '前端 vite 包', test: () => hasFile(WEB_DIR, 'node_modules', 'vite', 'package.json') },
+  { label: '前端 vite 可执行文件（node_modules/.bin/vite）', test: () => hasWebBin('vite') },
+  { label: '前端 @vitejs/plugin-vue', test: () => hasFile(WEB_DIR, 'node_modules', '@vitejs', 'plugin-vue', 'package.json') },
+  { label: '前端 tailwindcss', test: () => hasFile(WEB_DIR, 'node_modules', 'tailwindcss', 'package.json') },
+  { label: '后端 @types/node', test: () => hasFile(SERVER_DIR, 'node_modules', '@types', 'node', 'package.json') },
+  { label: '根 eslint', test: () => hasFile(ROOT, 'node_modules', 'eslint', 'package.json') },
+  { label: '根 typescript', test: () => hasFile(ROOT, 'node_modules', 'typescript', 'package.json') },
+]
+
+function missingDependencies() {
+  return DEPENDENCY_SENTINELS.filter((sentinel) => !sentinel.test())
+}
+
+/**
+ * pnpm 的安装状态缓存。
+ *
+ * 为什么非删不可：pnpm 依据 node_modules/.pnpm-workspace-state-v1.json 里的
+ * lastValidatedTimestamp 与各 package.json 的 mtime 走「快速路径」，直接输出
+ * 「Already up to date」——它**不核对 node_modules 里到底有没有东西**。
+ * 当依赖树是被 `pnpm install --prod` 剥掉 devDependencies 之后，manifest 没变、
+ * 时间戳没变，pnpm 就认定无事可做；`--force`、`--frozen-lockfile`、
+ * `--config.production=false` 都同样无效（2026-09-15 实测）。
+ * 只有删掉状态缓存，才能迫使它真正重新链接。
+ */
+const PNPM_STATE_FILES = [
+  join(ROOT, 'node_modules', '.pnpm-workspace-state-v1.json'),
+  join(ROOT, 'node_modules', '.modules.yaml'),
+]
+
 async function ensureDependencies() {
   step('检查依赖')
 
-  const required = [join(ROOT, 'node_modules'), join(SERVER_DIR, 'node_modules'), join(WEB_DIR, 'node_modules')]
-  const missing = required.filter((dir) => !existsSync(dir))
-
+  let missing = missingDependencies()
   if (missing.length === 0) {
-    info('node_modules 已就绪，跳过安装')
-    return
-  }
-  if (!flags.install) {
-    warn('node_modules 缺失，但已指定 --no-install，跳过')
+    info('依赖已就绪，跳过安装')
     return
   }
 
-  info('执行 pnpm install（首次或依赖缺失时）…')
+  for (const sentinel of missing) warn(`缺少 ${sentinel.label}`)
+
+  if (!flags.install) {
+    warn(`依赖不完整（缺 ${missing.length} 项），但已指定 --no-install，跳过`)
+    return
+  }
+
+  info('依赖不完整，执行 pnpm install …')
   await run('pnpm', ['install'])
+
+  // 走完快速路径后仍缺东西 ⇒ 依赖树多半是被 `pnpm install --prod` 剥过，
+  // 必须清掉状态缓存重来。清缓存会让 pnpm 重建 node_modules，而重建前它默认
+  // 要 TTY 确认——CI / 无 TTY 环境会报 ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY，
+  // 故显式关闭确认。
+  if (missingDependencies().length > 0) {
+    info('仍有缺失，清除 pnpm 状态缓存后重装（此前若跑过 pnpm install --prod 会触发该误判）…')
+    for (const file of PNPM_STATE_FILES) rmSync(file, { force: true })
+    await run('pnpm', ['install', '--config.confirmModulesPurge=false'])
+  }
+
+  missing = missingDependencies()
+  if (missing.length > 0) {
+    throw new Error(
+      `依赖安装后仍缺少：${missing.map((sentinel) => sentinel.label).join(' / ')}\n` +
+        '  常见原因：registry 不可达、代理拦截、或磁盘权限不足。可手动排查：\n' +
+        '    pnpm install --force\n' +
+        '    pnpm --filter @scienceing/web why vite',
+    )
+  }
   info('依赖安装完成')
 }
 

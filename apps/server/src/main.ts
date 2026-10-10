@@ -5,6 +5,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { AppModule } from './app.module';
 import { requestContextMiddleware } from './lib/request-context';
 import { createRateLimiter } from './lib/rate-limit';
+import { deploymentVerificationMiddleware } from './lib/deploy-verification';
 
 /** 爆破敏感端点（含全局前缀 /api）。 */
 const THROTTLED_PATHS = new Set(['/api/auth/login', '/api/admin/verify-password']);
@@ -47,11 +48,20 @@ async function bootstrap(): Promise<void> {
   // 手册正文支持 data URL 内联插图（编辑器自动压缩后随 Markdown 入库），
   // JSON 请求体默认上限 100kb 不够，放开到 12mb。
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  app.use(deploymentVerificationMiddleware);
   app.useBodyParser('json', { limit: '12mb' });
   app.setGlobalPrefix('api');
-  // 反代（vite dev / 生产网关/nginx）位于回环地址：仅信任回环来源的 X-Forwarded-For，
-  // 使 req.ip 反映真实客户端地址；非回环直接访问时伪造头不会被采纳（安全）。
-  app.getHttpAdapter().getInstance().set('trust proxy', 'loopback');
+  // 反代来源白名单。默认仅回环，对应开发（vite dev）与 Windows/LAN 单机部署形态。
+  //
+  // 容器化部署下 nginx 位于 Docker 网桥（如 172.28.0.0/16）而非回环，必须用
+  // TRUST_PROXY 显式配置该子网，否则 Express 不采信 X-Forwarded-For：
+  //   - req.ip 退化为 nginx 容器 IP，clientKey() 对所有用户返回同一个键，
+  //     而登录限流是「15 分钟内 10 次失败」——任意一人输错 10 次密码，
+  //     全团队会被锁 15 分钟（可用性事故）；
+  //   - 审计日志丢失真实来源 IP。
+  // 只信任显式配置的子网，公网直连时伪造的 X-Forwarded-For 依旧不被采纳。
+  const trustProxy = process.env.TRUST_PROXY?.trim() || 'loopback';
+  app.getHttpAdapter().getInstance().set('trust proxy', trustProxy);
 
   // 认证端点限流。只统计失败：正常登录不消耗配额，成功即清零。
   const authLimiter = createRateLimiter(AUTH_RATE_LIMIT);

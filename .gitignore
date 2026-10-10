@@ -32,6 +32,13 @@ playwright/.worker-logs/
 *.db-journal
 *.db-wal
 *.db-shm
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db.restore-*
+*.db.failed-*
+prod-schema*.json
 *.dev.db*
 *.prod.db*
 
@@ -66,6 +73,27 @@ deploy-lan/run/
 deploy-lan/nginx-prefix/
 deploy-lan/dist/
 deploy-lan/extension-lan/
+
+# 云端部署运行时产物（密钥/证书/制品/暂存一律不入库）
+deploy-cloud/.env
+deploy-cloud/certs/
+deploy-cloud/release/
+deploy-cloud/release.new/
+deploy-cloud/release.prev/
+deploy-cloud/.ext-staging/
+deploy-cloud/current.json
+deploy-cloud/current.env
+deploy-cloud/rollback.json
+deploy-cloud/deployment.pending.json*
+deploy-cloud/.operations.lock
+deploy-cloud/release.candidate-*/
+deploy-cloud/release.previous-*/
+deploy-cloud/release.failed-*/
+deploy-cloud/ops.previous-*/
+deploy-cloud/*.failed-*/
+__pycache__/
+# 扩展签名私钥（*.pem 已在上面统一忽略，这里显式再声明一次以防规则调整）
+deploy-cloud/extension-key.pem
 
 # 调试/验证用临时目录与脚本（不入库；此前误提交过，勿再 add）
 /.tmp-deps/

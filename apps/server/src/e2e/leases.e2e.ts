@@ -38,6 +38,7 @@ function resetPool(): void {
 }
 
 before(async () => {
+  process.env.NODE_ENV = 'test';
   process.env.DATABASE_PATH = ':memory:';
   process.env.SCIENCEING_MASTER_KEY = MASTER_KEY_HEX;
   app = await NestFactory.create(AppModule);

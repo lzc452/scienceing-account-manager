@@ -2,6 +2,7 @@ import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { createDatabaseBackup } from './backup';
 import { defaultBackupDirectory } from './config';
 import { DatabaseService } from './database.service';
+import { isDeploymentVerification } from '../lib/deploy-verification';
 
 const RETRY_MS = 60 * 60 * 1000;
 
@@ -19,7 +20,7 @@ export class BackupScheduler implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly database: DatabaseService) {}
 
   onModuleInit(): void {
-    if (process.env.NODE_ENV === 'production') this.schedule(millisecondsUntilNextTwoAm());
+    if (!isDeploymentVerification() && process.env.NODE_ENV === 'production') this.schedule(millisecondsUntilNextTwoAm());
   }
 
   onModuleDestroy(): void {
@@ -31,9 +32,9 @@ export class BackupScheduler implements OnModuleInit, OnModuleDestroy {
     this.timer.unref();
   }
 
-  private run(): void {
+  private async run(): Promise<void> {
     try {
-      const result = createDatabaseBackup(this.database.db, defaultBackupDirectory(), 'daily');
+      const result = await createDatabaseBackup(this.database.db, defaultBackupDirectory(), 'daily');
       console.log(`[backup] 每日备份完成：${result.path}（清理 ${result.removed.length} 个过期备份）`);
       this.schedule(millisecondsUntilNextTwoAm());
     } catch (error) {

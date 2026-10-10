@@ -1,5 +1,6 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ResetService } from './reset.service';
+import { isDeploymentVerification } from '../../lib/deploy-verification';
 
 /** 回收队列处理器：周期性消费 PENDING reset_job（单 Worker 串行）。 */
 @Injectable()
@@ -9,6 +10,7 @@ export class ResetQueueScheduler implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly resetService: ResetService) {}
 
   onModuleInit(): void {
+    if (isDeploymentVerification()) return;
     // 启动即清扫：上个进程若在 RUNNING 中途退出，该 job 会永久卡住（调度器只捡 PENDING）。
     try {
       const swept = this.resetService.sweepStaleRunningJobs();

@@ -147,7 +147,7 @@ function argument(name: string): string | undefined {
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const dryRun = process.argv.includes('--dry-run');
   const withBackup = !process.argv.includes('--no-backup');
   const database = resolve(argument('database') ?? defaultDatabasePath());
@@ -157,7 +157,7 @@ function main(): void {
   try {
     if (!dryRun && withBackup) {
       const directory = resolve(argument('directory') ?? defaultBackupDirectory());
-      const backup = createDatabaseBackup(db, directory, 'pre-aad-migration');
+      const backup = await createDatabaseBackup(db, directory, 'pre-aad-migration');
       console.log(`[reencrypt] 迁移前备份：${backup.path}`);
     }
     const summary = reencryptAccountPasswords(db, loadMasterKey(), dryRun);
@@ -172,10 +172,8 @@ function main(): void {
 }
 
 if (require.main === module) {
-  try {
-    main();
-  } catch (error) {
+  main().catch((error: unknown) => {
     console.error(`[reencrypt] ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
-  }
+  });
 }

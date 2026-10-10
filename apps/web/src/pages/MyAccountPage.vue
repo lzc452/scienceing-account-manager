@@ -13,7 +13,7 @@ import Dialog from '@/components/ui/Dialog.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import { toast } from '@/components/ui/toast'
 import { Check, Copy } from 'lucide-vue-next'
-import { downloadExtensionZip, formatDuration, getCurrentLease, pluginState, releaseLease } from '@/api'
+import { downloadExtensionZip, formatDuration, getCurrentLease, isAdmin, pluginState, releaseLease } from '@/api'
 import { toStatusKind } from '@/lib/status'
 
 // 进度条满刻度 = 后端下发的无操作超时租期（lease.timeoutSeconds）。
@@ -207,7 +207,7 @@ async function onRelease() {
 
           <div class="mt-6">
             <div class="mb-1.5 text-xs font-medium text-mid-gray">密码</div>
-            <PasswordReveal :password="account?.password || ''" />
+            <PasswordReveal :password="account?.password || ''" :can-reveal="isAdmin" />
           </div>
 
           <!-- 助手未就绪：先给出获取入口，避免用户点「打开科应」后无响应 -->

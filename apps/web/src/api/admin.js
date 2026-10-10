@@ -1,3 +1,4 @@
+/* global URLSearchParams */
 import { USE_MOCK, http } from './index'
 import { adminMockApi } from './admin-mock'
 
@@ -8,6 +9,10 @@ import { adminMockApi } from './admin-mock'
 
 export function getAdminAccounts() {
   return USE_MOCK ? adminMockApi.listAccounts() : http('GET', '/admin/accounts')
+}
+
+export function getAdminAccountPassword(accountId) {
+  return USE_MOCK ? adminMockApi.accountPassword(accountId) : http('GET', `/admin/accounts/${accountId}/password`)
 }
 
 export function forceRelease(accountId) {

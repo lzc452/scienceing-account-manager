@@ -1,8 +1,10 @@
 ﻿[CmdletBinding()]
 param(
     [string]$Tag = 'latest',
-    [string]$InstallRoot = 'D:\scienceing-prod',
+    [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'scienceing-account-manager\production'),
     [string]$LegacyDatabasePath,
+    [string]$ReleaseDirectory,
+    [ValidateRange(-1, 2147483647)][int]$BaselineVersion = -1,
     [switch]$Initialize,
     [switch]$SkipSync,
     [string]$DevHost = '1399-IT-100158',
@@ -16,6 +18,10 @@ $ErrorActionPreference = 'Stop'
 # 注意：Tag 格式校验放在下面 try 块内（latest 解析之后），这里不能提前校验，
 # 否则 deploy-prod.bat 默认传的 -Tag latest 会被当成非法版本直接拒绝。
 $InstallRoot = [System.IO.Path]::GetFullPath($InstallRoot)
+$codeRoot = [System.IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\')
+if ($InstallRoot -eq $codeRoot -or $InstallRoot.StartsWith($codeRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw 'InstallRoot 必须位于应用发布目录之外。'
+}
 Initialize-ProductionLayout -InstallRoot $InstallRoot
 $node = Get-ReleaseNode
 $databasePath = Join-Path $InstallRoot 'data\scienceing.prod.db'
@@ -30,6 +36,7 @@ $previousRelease = $null
 $legacyRoot = $null
 $databaseMayHaveChanged = $false
 $serviceWasStopped = $false
+$newServicesMayBeRunning = $false
 
 # 首次部署时自动寻找旧生产库：把旧库放到 InstallRoot\legacy\ 或 InstallRoot\data\
 # 或 InstallRoot\ 根目录即可，无需再显式传 -LegacyDatabasePath。
@@ -59,12 +66,12 @@ function Stop-StaleServicePorts {
     $gatewayPort = 18080
     $envFile = Join-Path $Root '.env'
     if (Test-Path -LiteralPath $envFile) {
-        $m = [regex]::Match((Get-Content -LiteralPath $envFile -Raw), '(?m)^\s*PORT\s*=\s*(\d+)')
+        $m = [regex]::Match((Get-Content -LiteralPath $envFile -Raw), '(?m)^\s*PORT\s*=\s*["'']?(\d+)')
         if ($m.Success) { $backendPort = [int]$m.Groups[1].Value }
     }
     $cfgFile = Join-Path $Root 'config.env'
     if (Test-Path -LiteralPath $cfgFile) {
-        $m = [regex]::Match((Get-Content -LiteralPath $cfgFile -Raw), '(?m)^\s*GATEWAY_PORT\s*=\s*(\d+)')
+        $m = [regex]::Match((Get-Content -LiteralPath $cfgFile -Raw), '(?m)^\s*GATEWAY_PORT\s*=\s*["'']?(\d+)')
         if ($m.Success) { $gatewayPort = [int]$m.Groups[1].Value }
     }
 
@@ -74,7 +81,7 @@ function Stop-StaleServicePorts {
         foreach ($ownerPid in ($connections | Select-Object -ExpandProperty OwningProcess -Unique)) {
             $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$ownerPid" -ErrorAction SilentlyContinue
             $commandLine = if ($proc) { [string]$proc.CommandLine } else { '' }
-            if (-not $commandLine) { continue }
+            if (-not $commandLine) { throw "无法确认端口 $port 的进程归属，禁止继续部署。" }
             # 判据与 deploy-lan/scripts/lib.mjs 的 isOurServiceCmd 保持一致：按解析后的
             # 产物路径匹配，不再用裸子串 'scienceing'——否则仓库目录下打开的编辑器、
             # 终端、或任何把该路径当参数传的进程都会被误判为「本项目的」而被强杀。
@@ -90,19 +97,32 @@ function Stop-StaleServicePorts {
                 $needle = ($marker -replace '\\', '/').ToLowerInvariant()
                 if ($normalizedCmd.Contains($needle)) { $isOurs = $true; break }
             }
-            if (-not $isOurs) {
-                # 兜底：以相对路径启动的后端入口（cwd 在 apps/server 时执行 node dist/main.js）
-                $isOurs = $commandLine -match '(^|[\s\\/])dist[\\/]main\.js'
-            }
-
             if ($isOurs) {
                 Write-Host "[deploy] 端口 $port 被旧实例占用（pid $ownerPid），自动停止…"
                 Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
                 Start-Sleep -Seconds 2
+                if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
+                    throw "端口 $port 的旧实例尚未停止，禁止继续部署。"
+                }
             }
             else {
                 throw "端口 $port 被无关进程占用（pid $ownerPid）：$commandLine。请释放端口后重试。"
             }
+        }
+    }
+}
+
+function Assert-ServicesStopped {
+    foreach ($file in @('.env', 'config.env')) {
+        $path = Join-Path $InstallRoot $file
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        $text = Get-Content -LiteralPath $path -Raw
+        $key = if ($file -eq '.env') { 'PORT' } else { 'GATEWAY_PORT' }
+        $defaultPort = if ($file -eq '.env') { 3000 } else { 18080 }
+        $match = [regex]::Match($text, ('(?m)^\s*' + $key + '\s*=\s*["'']?(\d+)'))
+        $port = if ($match.Success) { [int]$match.Groups[1].Value } else { $defaultPort }
+        if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
+            throw "服务端口 $port 仍在监听；禁止迁移或覆盖恢复数据库。"
         }
     }
 }
@@ -160,7 +180,7 @@ function Invoke-LegacyCommand {
         [System.Environment]::SetEnvironmentVariable('DATABASE_PATH', $LegacyDatabasePath, 'Process')
     }
     try {
-        & $node $script $Command --force
+        & $node $script $Command
         if ($LASTEXITCODE -ne 0) { throw "旧版 $Command 失败（退出码 $LASTEXITCODE）" }
     }
     finally {
@@ -186,13 +206,22 @@ try {
         [System.IO.FileShare]::None
     )
 
-    $share = Resolve-DevelopmentShare -DevHost $DevHost -ShareName $ShareName
+    if ($ReleaseDirectory) {
+        $releaseSource = [System.IO.Path]::GetFullPath($ReleaseDirectory)
+        $SkipSync = $true
+    }
+    else {
+        $share = Resolve-DevelopmentShare -DevHost $DevHost -ShareName $ShareName
+        $releaseSource = Join-Path $share.Root 'releases'
+    }
 
     if ($Tag -eq 'latest' -or -not $Tag) {
-        $Tag = Resolve-LatestReleaseTag -ShareRoot $share.Root
+        $Tag = Resolve-LatestReleaseTag -ReleaseDirectory $releaseSource
         Write-Host "[deploy] 自动选择最新 Release：$Tag"
     }
     if ($Tag -notmatch '^v\d+\.\d+\.\d+$') { throw "Tag 必须符合 vX.Y.Z：$Tag" }
+    $targetRelease = Join-Path $InstallRoot "releases\$Tag"
+    $staging = Join-Path $InstallRoot ("run\staging-$Tag-" + [guid]::NewGuid().ToString('N'))
 
     try {
         $logDirectory = Join-Path $InstallRoot 'run'
@@ -215,7 +244,7 @@ try {
         }
     }
     $zipName = "scienceing-$Tag.zip"
-    $remoteZip = Join-Path $share.Root "releases\$zipName"
+    $remoteZip = Join-Path $releaseSource $zipName
     $remoteSha = "$remoteZip.sha256"
     if (-not (Test-Path -LiteralPath $remoteZip) -or -not (Test-Path -LiteralPath $remoteSha)) {
         throw "共享目录缺少 Release 或 SHA256：$remoteZip"
@@ -235,7 +264,7 @@ try {
 
     # 生产机可以不装 git（纯部署模式）：此时只校验 release.json 自身一致性
     $tagCommit = $null
-    if ($gitAvailable) {
+    if ($gitAvailable -and -not $ReleaseDirectory) {
         $tagCommit = (& git -C $PSScriptRoot rev-list -n 1 "$Tag^{commit}" 2>&1 | Out-String).Trim()
         if ($LASTEXITCODE -ne 0 -or $tagCommit -notmatch '^[0-9a-f]{40}$') {
             throw "本地未获取到 Tag：$Tag（生产机未同步最新代码？先执行 .\sync-from-dev.ps1）"
@@ -265,7 +294,7 @@ try {
     $releaseJsonPath = Join-Path $staging 'release.json'
     if (-not (Test-Path -LiteralPath $releaseJsonPath)) { throw 'Release 缺少 release.json。' }
     $release = Get-Content -LiteralPath $releaseJsonPath -Raw | ConvertFrom-Json
-    $commitMismatch = $gitAvailable -and ($release.commit -ne $tagCommit)
+    $commitMismatch = $tagCommit -and ($release.commit -ne $tagCommit)
     if ($release.version -ne $Tag -or $commitMismatch -or $release.schemaVersion -notmatch '^\d+$') {
         throw "release.json 与 Tag 不一致：version=$($release.version) commit=$($release.commit)"
     }
@@ -278,15 +307,33 @@ try {
     }
 
     if ($staging -ne $targetRelease) {
-        Move-Item -LiteralPath $staging -Destination $targetRelease
+        $resolvedStage = [System.IO.Path]::GetFullPath($staging)
+        $resolvedRelease = [System.IO.Path]::GetFullPath($targetRelease)
+        $runRoot = [System.IO.Path]::GetFullPath((Join-Path $InstallRoot 'run')) + '\'
+        $releaseRoot = [System.IO.Path]::GetFullPath((Join-Path $InstallRoot 'releases')) + '\'
+        if (-not $resolvedStage.StartsWith($runRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+            -not $resolvedRelease.StartsWith($releaseRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw '版本目录移动超出安装目录，拒绝操作。'
+        }
+        # 防病毒扫描可能短暂锁定刚解压的文件；失败时保持旧应用和数据库不动。
+        foreach ($attempt in 1..5) {
+            try { Move-Item -LiteralPath $resolvedStage -Destination $resolvedRelease; break }
+            catch { if ($attempt -eq 5) { throw }; Start-Sleep -Milliseconds 300 }
+        }
         $staging = $targetRelease
     }
 
     if (Test-Path -LiteralPath $currentPath) {
         $current = Get-Content -LiteralPath $currentPath -Raw | ConvertFrom-Json
+        if ($current.version -notmatch '^v\d+\.\d+\.\d+$') { throw 'current.json 的版本无效，禁止猜测旧版本路径。' }
         if ($current.version -eq $Tag) { throw "$Tag 已是当前生产版本。" }
         $candidate = Join-Path $InstallRoot "releases\$($current.version)"
-        if (Test-Path -LiteralPath $candidate) { $previousRelease = $candidate }
+        if (-not (Test-Path -LiteralPath $candidate)) { throw "当前版本目录不存在，无法保证回滚：$candidate" }
+        $previousRelease = $candidate
+    }
+
+    if ($Initialize -and ((Test-Path -LiteralPath $databasePath) -or $LegacyDatabasePath)) {
+        throw '已有生产数据库或指定了旧库，禁止 -Initialize / 种子初始化。'
     }
 
     if ($LegacyDatabasePath) {
@@ -322,17 +369,17 @@ try {
 
     Set-ProductionEnvironment
     if ($previousRelease) {
-        $serviceWasStopped = $true
-        Invoke-ReleaseCommand -ReleaseRoot $previousRelease -Command 'stop' -Arguments @('--force')
+        Invoke-ReleaseCommand -ReleaseRoot $previousRelease -Command 'stop'
     }
     elseif ($legacyRoot) {
-        $serviceWasStopped = $true
         Invoke-LegacyCommand -Command 'stop'
     }
     else {
         # 首次部署（无上一版本指针）：旧实例可能还占着 3000/18080，自动清理
         Stop-StaleServicePorts -Root $InstallRoot
     }
+    Assert-ServicesStopped
+    $serviceWasStopped = [bool]($previousRelease -or $legacyRoot)
 
     if (-not (Test-Path -LiteralPath $databasePath)) {
         if (-not $LegacyDatabasePath) {
@@ -358,15 +405,18 @@ try {
     }
 
     $databaseMayHaveChanged = $true
-    Invoke-ReleaseCommand -ReleaseRoot $targetRelease -Command 'db:migrate'
-    # 结构兜底：即便历史环境漏过迁移，db:doctor 也会按 Release 内迁移定义补齐表/列（幂等）
-    Invoke-ReleaseCommand -ReleaseRoot $targetRelease -Command 'db:doctor' -Arguments @('--fix', '--quiet')
+    $migrationArguments = @()
+    if ($BaselineVersion -ge 0) { $migrationArguments += @('--baseline', [string]$BaselineVersion) }
+    if ($Initialize -and -not $LegacyDatabasePath) { $migrationArguments += '--initialize' }
+    Invoke-ReleaseCommand -ReleaseRoot $targetRelease -Command 'db:migrate' -Arguments $migrationArguments
     if ($Initialize -and -not $LegacyDatabasePath) {
         Invoke-ReleaseCommand -ReleaseRoot $targetRelease -Command 'db:seed'
     }
     Invoke-ReleaseCommand -ReleaseRoot $targetRelease -Command 'db:verify'
     Invoke-ReleaseCommand -ReleaseRoot $targetRelease -Command 'extension:pack'
+    $newServicesMayBeRunning = $true
     Invoke-ReleaseCommand -ReleaseRoot $targetRelease -Command 'start'
+    Invoke-ReleaseCommand -ReleaseRoot $targetRelease -Command 'status'
 
     $pointer = [ordered]@{
         version = $Tag
@@ -382,7 +432,6 @@ try {
     Write-Host "生产数据库：$databasePath"
     Write-Host "发布前备份：$predeployBackup"
     Write-Host ''
-    Invoke-ReleaseCommand -ReleaseRoot $targetRelease -Command 'status'
 }
 catch {
     $failure = $_
@@ -391,7 +440,8 @@ catch {
     if ($databaseMayHaveChanged -and $predeployBackup -and (Test-Path -LiteralPath $targetRelease)) {
         try {
             Set-ProductionEnvironment
-            try { Invoke-ReleaseCommand -ReleaseRoot $targetRelease -Command 'stop' -Arguments @('--force') } catch { Write-Warning $_.Exception.Message }
+            if ($newServicesMayBeRunning) { Invoke-ReleaseCommand -ReleaseRoot $targetRelease -Command 'stop' }
+            Assert-ServicesStopped
             [void](Invoke-Maintenance -ReleaseRoot $targetRelease -Arguments @('restore', '--source', $predeployBackup, '--target', $databasePath))
             if ($previousRelease) {
                 Invoke-ReleaseCommand -ReleaseRoot $previousRelease -Command 'start'
@@ -408,7 +458,7 @@ catch {
             [Console]::Error.WriteLine("自动回滚未完全成功，需要人工处理：$($_.Exception.Message)")
         }
     }
-    if ($serviceWasStopped -and -not $restartHandled -and (-not $databaseMayHaveChanged -or -not $predeployBackup)) {
+    if ($serviceWasStopped -and -not $restartHandled -and -not $databaseMayHaveChanged) {
         try {
             if ($previousRelease) { Invoke-ReleaseCommand -ReleaseRoot $previousRelease -Command 'start' }
             elseif ($legacyRoot) { Invoke-LegacyCommand -Command 'start' }

@@ -1,5 +1,6 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { AuthService } from './auth.service';
+import { isDeploymentVerification } from '../../lib/deploy-verification';
 
 /** 默认 30 分钟清扫一次；可用 SESSION_SWEEP_INTERVAL_MS 覆盖。 */
 const DEFAULT_INTERVAL_MS = 30 * 60_000;
@@ -18,6 +19,7 @@ export class SessionSweepScheduler implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly authService: AuthService) {}
 
   onModuleInit(): void {
+    if (isDeploymentVerification()) return;
     // 启动先扫一次：进程可能已停机很久，表里会积压大量过期行。
     this.runOnce();
 

@@ -1,5 +1,6 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { LeasesService } from '../modules/leases/leases.service';
+import { isDeploymentVerification } from '../lib/deploy-verification';
 
 /**
  * 超时回收调度器（PRD §25）：每 10~30 秒执行一次（默认 15s，可用 RECYCLE_INTERVAL_MS 覆盖）。
@@ -12,6 +13,7 @@ export class TimeoutScheduler implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly leasesService: LeasesService) {}
 
   onModuleInit(): void {
+    if (isDeploymentVerification()) return;
     const intervalMs = Number(process.env.RECYCLE_INTERVAL_MS ?? 15000);
     this.timer = setInterval(() => {
       try {

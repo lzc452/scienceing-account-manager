@@ -9,6 +9,8 @@ import { AppModule } from '../app.module';
 import { DatabaseService } from '../db/database.service';
 import { seedDatabase } from '../db/seed';
 import { hashPassword } from '../crypto/password';
+import { accountAad, encryptSecret, serializePayload } from '../crypto/secret-box';
+import { SEED_PLACEHOLDER_PASSWORD } from '../db/seed';
 import { claimAsExtension, completeSeedAdminFirstLogin, provisionSeedAccounts } from './extension-fixture';
 
 const MASTER_KEY_HEX = '06bd85dc11dd5998a014a042afb70e714c41f6d46a94b1b119cfd26bff999e54';
@@ -21,6 +23,7 @@ let adminToken: string;
 let userToken: string;
 
 before(async () => {
+  process.env.NODE_ENV = 'test';
   process.env.DATABASE_PATH = ':memory:';
   process.env.SCIENCEING_MASTER_KEY = MASTER_KEY_HEX;
   app = await NestFactory.create(AppModule);
@@ -57,6 +60,34 @@ test('GET /admin/accounts 列表（10 账号）', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.length, 10);
   assert.equal(res.body[0].code, 'KY-01');
+  assert.ok(res.body.every((account: Record<string, unknown>) => !('password' in account)));
+});
+
+test('管理员按需查看当前密码：权限、占位、解密错误、审计脱敏及禁止缓存', async () => {
+  const path = '/api/admin/accounts/1/password';
+  assert.equal((await request(app.getHttpServer()).get(path)).status, 401);
+  assert.equal((await request(app.getHttpServer()).get(path).set('Authorization', `Bearer ${userToken}`)).status, 403);
+  assert.equal((await request(app.getHttpServer()).get('/api/admin/accounts/99999/password').set('Authorization', `Bearer ${adminToken}`)).status, 404);
+  const original = db.prepare('SELECT current_password_ciphertext, pending_password_ciphertext FROM scienceing_accounts WHERE id = 1').get() as { current_password_ciphertext: string; pending_password_ciphertext: string | null };
+  const encrypted = (value: string) => serializePayload(encryptSecret(value, Buffer.from(MASTER_KEY_HEX, 'hex'), accountAad(1)));
+  const update = db.prepare('UPDATE scienceing_accounts SET current_password_ciphertext = ?, pending_password_ciphertext = ? WHERE id = 1');
+  try {
+    update.run(encrypted('admin-visible-secret'), encrypted('pending-secret'));
+    const response = await request(app.getHttpServer()).get(path).set('Authorization', `Bearer ${adminToken}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers['cache-control'], 'no-store');
+    assert.deepEqual(response.body, { accountId: 1, password: 'admin-visible-secret' });
+    update.run(encrypted(SEED_PLACEHOLDER_PASSWORD), null);
+    assert.equal((await request(app.getHttpServer()).get(path).set('Authorization', `Bearer ${adminToken}`)).status, 409);
+    update.run('invalid-ciphertext', null);
+    assert.equal((await request(app.getHttpServer()).get(path).set('Authorization', `Bearer ${adminToken}`)).status, 503);
+    const logs = db.prepare("SELECT * FROM audit_logs WHERE action = 'ADMIN_PASSWORD_REVEAL'").all();
+    assert.equal(logs.length, 3);
+    assert.ok(!JSON.stringify(logs).includes('admin-visible-secret'));
+    assert.ok(!JSON.stringify(logs).includes('pending-secret'));
+  } finally {
+    update.run(original.current_password_ciphertext, original.pending_password_ciphertext);
+  }
 });
 
 test('force-release / reset-password / mark-available / disable 集成', async () => {

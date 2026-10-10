@@ -9,12 +9,17 @@ param(
     [switch]$AllowDirty,
     [switch]$SkipTests,
     [switch]$DryRun,
+    [string]$CloudHost,
+    [string]$ExtensionKeyPath,
     [string]$LanGitPath = 'E:\git-local-share\scienceing.git',
     [string]$OutputDirectory = 'E:\git-local-share\releases'
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if ([bool]$CloudHost -ne [bool]$ExtensionKeyPath) { throw 'CloudHost 与 ExtensionKeyPath 必须同时指定' }
+if ($CloudHost -and ($CloudHost -notmatch '^[a-zA-Z0-9.-]+$' -or ([uri]"https://$CloudHost").Host -ne $CloudHost)) { throw 'CloudHost 必须是裸域名或 IP 地址' }
+if ($ExtensionKeyPath -and [System.IO.Path]::GetFullPath($ExtensionKeyPath).StartsWith([System.IO.Path]::GetFullPath($OutputDirectory).TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)) { throw '扩展私钥必须位于发布输出目录之外' }
 . (Join-Path $PSScriptRoot 'deploy-lan\scripts\release-common.ps1')
 
 $repoRoot = $PSScriptRoot
@@ -128,7 +133,8 @@ if ($DryRun) {
     Write-Host "  git push $RemoteName $Tag"
     if ($PushBranch) { Write-Host "  git push $RemoteName $currentBranch" }
     $skipText = if ($SkipTests) { ' -SkipTests' } else { '' }
-    Write-Host "  .\create-release.ps1 -Tag $Tag -LanGitPath $LanGitPath -OutputDirectory $OutputDirectory$skipText"
+    $cloudText = if ($CloudHost) { " -CloudHost $CloudHost -ExtensionKeyPath `"$ExtensionKeyPath`"" } else { '' }
+    Write-Host "  .\create-release.ps1 -Tag $Tag -LanGitPath $LanGitPath -OutputDirectory $OutputDirectory$skipText$cloudText"
     Write-Host '[DryRun] 未做任何改动。'
     exit 0
 }
@@ -161,6 +167,7 @@ $arguments = @(
     '-OutputDirectory', $OutputDirectory
 )
 if ($SkipTests) { $arguments += '-SkipTests' }
+if ($CloudHost) { $arguments += @('-CloudHost', $CloudHost, '-ExtensionKeyPath', $ExtensionKeyPath) }
 Invoke-NativeChecked -Command 'powershell.exe' -Arguments $arguments -WorkingDirectory $repoRoot
 
 Write-Host ''

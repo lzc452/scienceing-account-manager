@@ -17,6 +17,8 @@ interface ExtensionPackageMeta {
   downloadPath?: string;
   updatedAt?: string;
   dashboardOrigin?: string;
+  extensionId?: string;
+  sha256?: string;
 }
 
 // 编译产物位于 apps/server/dist/modules/extension → 上溯 4 级到 apps/，再进 web/dist/downloads
@@ -47,6 +49,8 @@ function readPackage(): ExtensionPackageMeta {
       downloadPath: meta.downloadPath ?? `/downloads/${meta.fileName}`,
       updatedAt: meta.updatedAt,
       dashboardOrigin: meta.dashboardOrigin,
+      extensionId: meta.extensionId,
+      sha256: meta.sha256,
     };
   } catch {
     return { available: false };

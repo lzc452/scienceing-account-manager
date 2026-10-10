@@ -31,15 +31,24 @@ apps/extension/
 4. 点「加载已解压的扩展程序」，选择 `apps/extension` 目录。
 5. 保持此目录不动（unpacked 扩展依赖原目录，PRD §53）。
 
-## 域名配置（部署必读）
+## 地址配置（部署必读）
 
-PRD 未固化科应/看板生产域名，本仓库以占位符给出，上线前需**同步**替换两处：
+**不要手工改** `manifest.json` 与 `src/lib/config.js` —— 看板域与后端域都已由部署脚本自动替换。
 
 | 项 | 开发默认值 | 说明 |
 |---|---|---|
-| 看板域 | `http://localhost:5173`（Vite） | `manifest.json` content_scripts.matches + `src/lib/config.js` DASHBOARD_ORIGINS/DASHBOARD_URL |
-| 科应域 | `https://www.scienceing.com` | `manifest.json` content_scripts.matches + `src/lib/config.js` SCIENCEING_ORIGINS/SCIENCEING_URL |
+| 看板域 | `http://localhost:5173`（Vite） | `manifest.json` content_scripts.matches + `src/lib/config.js` DASHBOARD_ORIGINS / DASHBOARD_URL / DASHBOARD_MY_URL |
 | 后端域 | `http://localhost:3000`（NestJS） | `manifest.json` host_permissions + `src/lib/config.js` API_BASE（生产为看板同源） |
+| 科应域 | `https://www.scienceing.com` | **无需替换**，开发与生产一致 |
+
+两条部署路径各自有自动化脚本：
+
+- **局域网（Windows）**：`deploy-lan` 的 `extension:pack`（见 `deploy-lan/README.md`）
+- **云端（腾讯云轻量）**：`node deploy-cloud/scripts/patch-extension.mjs --host <IP 或域名>`
+
+云端脚本除了替换地址，还会往 `manifest.json` 注入 `key`（RSA 公钥）以**固定扩展 ID** —— 未打包扩展的 ID 原本由解压路径派生，不固定就无法把后端 CORS 来源收敛到具体 ID。私钥落在 `deploy-cloud/extension-key.pem`，必须离线备份。
+
+完整流程见 `docs/install-extension.md` §4。
 
 科应真实域名请以正式开通通知为准（[科应全球创新数据平台 Scienceing](https://www.lib.szu.edu.cn/node/18772) 等试用页）。
 

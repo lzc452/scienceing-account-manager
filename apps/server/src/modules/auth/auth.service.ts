@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseService } from '../../db/database.service';
 import { AuditService } from '../../db/audit.service';
 import { AUDIT_ACTION, AUDIT_RESULT } from '../../db/constants';
-import { hashPassword, verifyPassword } from '../../crypto/password';
+import { DUMMY_HASH, hashPassword, verifyPassword } from '../../crypto/password';
 import { SESSION_TTL_MS, type AuthUser, type LoginResult, toAuthUser, type UserRow } from './auth.types';
 
 function sha256Hex(value: string): string {
@@ -28,8 +28,10 @@ export class AuthService {
       | UserRow
       | undefined;
 
-    // 统一错误：不区分「用户不存在」与「密码错误」，避免账号枚举（PRODUCT-DESIGN §5.2）
+    // 统一错误：不区分「用户不存在」与「密码错误」，避免账号枚举（PRODUCT-DESIGN §5.2）。
+    // 即使用户不存在，也执行一次 bcrypt 比较（对 dummy hash），消除时序侧信道。
     if (!row) {
+      await verifyPassword(password, DUMMY_HASH);
       this.audit.record({
         action: AUDIT_ACTION.LOGIN,
         result: AUDIT_RESULT.FAILED,

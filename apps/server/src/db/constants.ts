@@ -75,6 +75,7 @@ export const AUDIT_ACTION = {
   MANUAL_UPDATE: 'MANUAL_UPDATE',
   /** 管理员执行敏感操作前自证当前密码（USER_PASSWORD_RESET 的前置验证） */
   ADMIN_PASSWORD_VERIFY: 'ADMIN_PASSWORD_VERIFY',
+  ADMIN_PASSWORD_REVEAL: 'ADMIN_PASSWORD_REVEAL',
 } as const;
 
 /** 审计结果 */
@@ -124,4 +125,5 @@ export const AUDIT_ACTION_LABEL: Record<keyof typeof AUDIT_ACTION, string> = {
   MANUAL_UPDATE: '更新使用手册',
   PASSWORD_DECRYPT_FAILED: '密码解密失败',
   ADMIN_PASSWORD_VERIFY: '验证管理员密码',
+  ADMIN_PASSWORD_REVEAL: '查看科应账号密码',
 };

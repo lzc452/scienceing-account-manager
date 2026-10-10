@@ -43,6 +43,7 @@ let adminToken: string;
 let userToken: string;
 
 before(async () => {
+  process.env.NODE_ENV = 'test';
   process.env.DATABASE_PATH = ':memory:';
   process.env.SCIENCEING_MASTER_KEY = MASTER_KEY_HEX;
   // 测试期间关闭后台定时器，避免与手动调用抢跑
