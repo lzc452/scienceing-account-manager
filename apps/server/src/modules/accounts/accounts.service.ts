@@ -16,6 +16,12 @@ export interface AccountPoolItem {
   estimatedReleaseAt: string | null;
 }
 
+export interface AccountContinuityItem extends AccountPoolItem {
+  accountId: number;
+  enabled: boolean;
+  lastUsedAt: string | null;
+}
+
 /** 无操作超时默认 24 小时（配置单位为小时，见 system_settings.inactivity_timeout_hours） */
 const DEFAULT_INACTIVITY_TIMEOUT_HOURS = 24;
 
@@ -71,6 +77,34 @@ export class AccountsService {
       }
       return { code: row.code, status: row.status, estimatedReleaseAt };
     });
+  }
+
+  mine(userId: number): AccountContinuityItem[] {
+    const timeoutSeconds = this.inactivityTimeoutSeconds();
+    const rows = this.dbService.db.prepare(
+      `SELECT a.id, a.code, a.status, a.enabled, h.last_used_at, l.last_activity_at
+       FROM scienceing_accounts a
+       LEFT JOIN (
+         SELECT account_id, MAX(started_at) AS last_used_at FROM leases
+         WHERE user_id = ? GROUP BY account_id
+       ) h ON h.account_id = a.id
+       LEFT JOIN leases l ON l.account_id = a.id AND l.status = 'ACTIVE'
+       WHERE a.enabled = 1 OR h.last_used_at IS NOT NULL
+       ORDER BY h.last_used_at DESC, a.code`,
+    ).all(userId) as unknown as Array<{
+      id: number; code: string; status: string; enabled: number;
+      last_used_at: string | null; last_activity_at: string | null;
+    }>;
+    return rows.map((row) => ({
+      accountId: row.id,
+      code: row.code,
+      status: row.status,
+      enabled: row.enabled === 1,
+      lastUsedAt: row.last_used_at,
+      estimatedReleaseAt: row.status === 'IN_USE' && row.last_activity_at
+        ? new Date(new Date(row.last_activity_at).getTime() + timeoutSeconds * 1000).toISOString()
+        : null,
+    }));
   }
 
   /** 无操作超时（秒）：配置按小时存（inactivity_timeout_hours），此处换算成秒。 */

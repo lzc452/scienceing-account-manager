@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import PublicLayout from '@/layouts/PublicLayout.vue'
 import StatBlock from '@/components/StatBlock.vue'
@@ -9,10 +9,12 @@ import Card from '@/components/ui/Card.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import { toast } from '@/components/ui/toast'
 import {
+  authState,
   claimLease,
   formatDuration,
   getAvailability,
   getCurrentLease,
+  getMyAccounts,
   getPool,
   isAdmin,
   isLoggedIn,
@@ -28,9 +30,12 @@ const error = ref('')
 const availability = ref({ total: 0, available: 0, inUse: 0, recycling: 0, error: 0 })
 const pool = ref([])
 const hasActiveLease = ref(false)
+const activeAccountId = ref(null)
+const myAccounts = ref([])
 const claiming = ref(false)
 
 let pollTimer
+let loadRequest = 0
 
 /**
  * 统一为卡片模型：公开池只有 code/status/estimatedReleaseAt（游客）；
@@ -39,38 +44,49 @@ let pollTimer
  */
 function normalizeCard(a) {
   return {
-    id: a.id ?? null,
+    id: a.accountId ?? a.id ?? null,
     code: a.code,
     username: a.username ?? '',
     status: toStatusKind(a.status),
     enabled: a.enabled ?? true,
     estimatedReleaseAt: a.estimatedReleaseAt ?? null,
     currentUser: a.currentUser ?? null,
+    lastUsedAt: a.lastUsedAt ?? null,
   }
 }
 
 async function load() {
+  const request = ++loadRequest
+  const userId = authState.user?.id
   try {
-    const [avail] = await Promise.all([getAvailability()])
+    const [avail, rows, current] = await Promise.all([
+      getAvailability(),
+      isLoggedIn.value ? getMyAccounts() : getPool(),
+      isLoggedIn.value ? getCurrentLease() : Promise.resolve({ lease: null }),
+    ])
+    const cards = isAdmin.value ? await getAdminAccounts() : rows.filter((a) => a.enabled !== false)
+    if (request !== loadRequest || userId !== authState.user?.id) return
     availability.value = avail
-    const rows = isAdmin.value ? await getAdminAccounts() : await getPool()
-    pool.value = (rows || []).map(normalizeCard)
+    pool.value = cards.map(normalizeCard)
+    myAccounts.value = isLoggedIn.value ? rows.map(normalizeCard) : []
+    activeAccountId.value = current.lease?.accountId ?? null
+    hasActiveLease.value = Boolean(current.lease)
     error.value = ''
-
-    if (isLoggedIn.value) {
-      try {
-        const { lease } = await getCurrentLease()
-        hasActiveLease.value = Boolean(lease)
-      } catch {
-        hasActiveLease.value = false
-      }
-    }
   } catch (e) {
-    error.value = e?.message || '服务不可用'
+    if (request === loadRequest && userId === authState.user?.id) error.value = e?.message || '服务不可用'
   } finally {
-    loading.value = false
+    if (request === loadRequest) loading.value = false
   }
 }
+
+watch(() => authState.user?.id, () => {
+  myAccounts.value = []
+  pool.value = []
+  activeAccountId.value = null
+  hasActiveLease.value = false
+  loading.value = true
+  void load()
+})
 
 onMounted(() => {
   load()
@@ -80,6 +96,17 @@ onMounted(() => {
 onBeforeUnmount(() => window.clearInterval(pollTimer))
 
 const pluginReady = computed(() => pluginState.status === 'ready')
+const selectionReady = computed(() => pluginReady.value && pluginState.supportsAccountSelection)
+const recentAccounts = computed(() => myAccounts.value.filter((a) => a.lastUsedAt))
+
+function cannotClaim(account) {
+  return loading.value || Boolean(error.value) || !selectionReady.value || claiming.value || !account.enabled
+    || (activeAccountId.value !== null ? activeAccountId.value !== account.id : account.status !== 'available')
+}
+
+function lastUsedLabel(value) {
+  return new Date(value).toLocaleString('zh-CN', { hour12: false })
+}
 
 /** 由 estimatedReleaseAt（ISO 时间戳）计算剩余秒数。 */
 function remainingOf(account) {
@@ -130,9 +157,13 @@ async function onCta() {
     router.push('/my')
     return
   }
+  await onClaim()
+}
+
+async function onClaim(accountId) {
   claiming.value = true
   try {
-    const res = await claimLease()
+    const res = await claimLease(accountId)
     // 暂存 leaseToken（后端只存其哈希、无法从 current 还原），供「打开科应」BIND_AND_OPEN 使用
     if (res?.leaseToken) sessionStorage.setItem('scienceing_lease_token', res.leaseToken)
     toast({ title: `已领取 ${res.account.code}`, description: '正在跳转到我的账号…', variant: 'success' })
@@ -203,6 +234,39 @@ function openAccount(card) {
           <div class="bg-paper p-4 sm:p-5">
             <StatBlock label="异常" :value="availability.error" dot="#e7000b" />
           </div>
+        </div>
+      </Card>
+
+      <Card v-if="isLoggedIn">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-hairline p-4 sm:p-5">
+          <div>
+            <h2 class="text-base font-semibold leading-6 text-ink">我用过的账号</h2>
+            <p class="mt-1 text-sm text-mid-gray">知识库、订阅、SCIHelp 和问答历史保存在科应原账号中，选择原账号继续查看。</p>
+          </div>
+          <Button variant="outline" size="sm" :disabled="loading || claiming" @click="load">刷新状态</Button>
+        </div>
+        <div class="p-4 sm:p-5">
+          <p v-if="loading" class="text-sm text-mid-gray">正在加载使用历史…</p>
+          <p v-else-if="error" role="alert" class="text-sm text-ember">{{ error }}，请刷新状态后重试。</p>
+          <p v-else-if="recentAccounts.length === 0" class="text-sm text-mid-gray">领取成功后会自动记录账号，无需登记科应资源。</p>
+          <ul v-else class="flex flex-col divide-y divide-hairline">
+            <li v-for="account in recentAccounts" :key="account.id" class="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-3">
+                  <span class="font-semibold text-ink">{{ account.code }}</span>
+                  <StatusDot :status="account.enabled ? account.status : 'released'" :label="account.enabled ? '' : '已停用'" />
+                </div>
+                <p class="mt-1 text-xs text-mid-gray">最近使用：{{ lastUsedLabel(account.lastUsedAt) }}</p>
+                <p v-if="!account.enabled" class="mt-1 text-xs text-mid-gray">已停用，无法继续领取，请联系管理员。</p>
+                <p v-else-if="account.status !== 'available' && activeAccountId !== account.id" class="mt-1 text-xs text-mid-gray">暂不可领取，请刷新状态后重试。</p>
+              </div>
+              <Button variant="outline" size="sm" :disabled="cannotClaim(account)" @click="onClaim(account.id)">
+                {{ activeAccountId === account.id ? '继续使用当前账号' : '继续使用此账号' }}
+              </Button>
+            </li>
+          </ul>
+          <p v-if="!selectionReady && !loading" class="mt-3 text-sm text-mid-gray">继续使用及指定领取需要助手 1.4.0 及以上，请通过顶部入口安装或升级扩展。</p>
+          <p v-if="hasActiveLease" class="mt-3 text-sm text-mid-gray">您已持有一个账号，切换账号前请先到“我的账号”归还。</p>
         </div>
       </Card>
 
@@ -279,6 +343,16 @@ function openAccount(card) {
                 <template v-else-if="card.status === 'available'">可领取</template>
                 <template v-else>{{ statusLabel(card.status) }}</template>
               </div>
+              <Button
+                v-if="isLoggedIn"
+                variant="outline"
+                size="sm"
+                class="mt-3"
+                :disabled="cannotClaim(card)"
+                @click.stop="onClaim(card.id)"
+              >
+                {{ activeAccountId === card.id ? '继续使用当前账号' : '指定领取此账号' }}
+              </Button>
             </div>
           </div>
         </div>

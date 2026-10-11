@@ -2,6 +2,7 @@ import { reactive } from 'vue'
 import { ACTION_LABELS } from '@/lib/audit-labels'
 /* global setTimeout */
 import { authState } from './index'
+import { mockState } from './mock'
 
 /**
  * 管理后台内存 mock 后端（t8）。真实联调时由 admin.js 切到 fetch。
@@ -43,7 +44,7 @@ const state = reactive({
     { id: 8, code: 'KY-08', username: 'ky-08', status: 'AVAILABLE', currentUser: null, lastPasswordChangedAt: ago(7 * DAY), enabled: true, createdAt: ago(30 * DAY) },
     { id: 9, code: 'KY-09', username: 'ky-09', status: 'AVAILABLE', currentUser: null, lastPasswordChangedAt: ago(7 * DAY), enabled: true, createdAt: ago(30 * DAY) },
     { id: 10, code: 'KY-10', username: 'ky-10', status: 'AVAILABLE', currentUser: null, lastPasswordChangedAt: ago(7 * DAY), enabled: true, createdAt: ago(30 * DAY) },
-  ],
+  ].map((account) => Object.assign(mockState.pool.find((a) => a.id === account.id), account)),
   leases: [
     { id: 104, userDisplayName: '张三', accountCode: 'KY-02', status: 'ACTIVE', startedAt: ago(HOUR), lastActivityAt: ago(3 * MIN), releasedAt: null, releaseReason: null },
     { id: 103, userDisplayName: '王五', accountCode: 'KY-01', status: 'RELEASED', startedAt: ago(DAY), lastActivityAt: ago(DAY - 2 * HOUR), releasedAt: ago(DAY - 2 * HOUR + MIN), releaseReason: 'USER_RETURN' },
@@ -72,7 +73,7 @@ const state = reactive({
     critical_warning_hours: '1',
     activity_throttle_seconds: '5',
     extension_min_version: '1.0.0',
-    extension_latest_version: '1.3.0',
+    extension_latest_version: '1.4.0',
   },
   health: {
     lastCheckedAt: ago(5 * MIN),
@@ -101,7 +102,12 @@ async function listAccounts() {
   await delay()
   // passwordProvisioned：真实后端由解密判断返回。mock 未标注的账号默认视为已初始化，
   // 仅显式 false（模拟导入后待改密场景）才显示「待改密」标记。
-  return state.accounts.map((a) => ({ ...a, passwordProvisioned: a.passwordProvisioned !== false }))
+  return state.accounts.map((a) => ({ ...a, passwordProvisioned: a.passwordProvisioned !== false, hasUsageHistory: accountHasHistory(a) }))
+}
+
+function accountHasHistory(account) {
+  return state.leases.some((lease) => lease.accountId === account.id || lease.accountCode === account.code)
+    || mockState.leases.some((lease) => lease.accountId === account.id)
 }
 
 function accountOf(id) {
@@ -123,7 +129,8 @@ async function accountPassword(id) {
 async function forceRelease(id) {
   await delay()
   const account = accountOf(id)
-  const lease = state.leases.find((l) => l.accountCode === account.code && l.status === 'ACTIVE')
+  const lease = mockState.leases.find((l) => l.accountId === account.id && l.status === 'ACTIVE')
+    ?? state.leases.find((l) => l.accountCode === account.code && l.status === 'ACTIVE')
   if (!lease) return { accountId: account.id, status: account.status, recycled: false }
   lease.status = 'RECYCLING'
   lease.releaseReason = 'ADMIN_FORCE'
@@ -140,6 +147,9 @@ async function resetPassword(id) {
   account.status = 'RECYCLING'
   account.currentUser = null
   account.lastPasswordChangedAt = new Date().toISOString()
+  for (const lease of mockState.leases) {
+    if (lease.accountId === account.id && lease.status === 'ACTIVE') lease.status = 'RECYCLING'
+  }
   return { accountId: account.id, status: 'RECYCLING' }
 }
 
@@ -155,7 +165,8 @@ async function disable(id) {
   await delay()
   const account = accountOf(id)
   account.enabled = false
-  const lease = state.leases.find((l) => l.accountCode === account.code && l.status === 'ACTIVE')
+  const lease = mockState.leases.find((l) => l.accountId === account.id && l.status === 'ACTIVE')
+    ?? state.leases.find((l) => l.accountCode === account.code && l.status === 'ACTIVE')
   if (lease) {
     lease.status = 'RECYCLING'
     lease.releaseReason = 'ADMIN_FORCE'
@@ -174,12 +185,22 @@ async function enable(id) {
 async function renameAccount(id, dto) {
   await delay()
   const account = accountOf(id)
-  const username = (dto.username ?? '').trim()
-  if (!username) throw httpError('账号名称不能为空', 400)
-  if (state.accounts.some((a) => a.id !== account.id && a.username === username)) {
+  const username = dto.username?.trim()
+  const code = dto.code?.trim()
+  if (username !== undefined && !username) throw httpError('账号名称不能为空', 400)
+  if (code !== undefined && !code) throw httpError('账号编号不能为空', 400)
+  if (username && username !== account.username && accountHasHistory(account)) {
+    throw httpError('账号已有使用历史，不能替换科应账号；请新增账号或禁用原账号', 409)
+  }
+  if (username && state.accounts.some((a) => a.id !== account.id && a.username === username)) {
     throw httpError(`账号名称「${username}」已被其他账号使用`, 409)
   }
-  account.username = username
+  if (code && state.accounts.some((a) => a.id !== account.id && a.code === code)) throw httpError('账号编号已存在', 409)
+  if (code && code !== account.code) {
+    for (const lease of state.leases) if (lease.accountCode === account.code) lease.accountId = account.id
+    account.code = code
+  }
+  if (username) account.username = username
   return { ...account }
 }
 
@@ -208,15 +229,16 @@ async function createAccount(dto) {
     passwordProvisioned: false,
   }
   state.accounts.push(account)
+  mockState.pool.push(account)
   return { ...account }
 }
 
 async function deleteAccount(id) {
   await delay()
   const account = accountOf(id)
-  const lease = state.leases.find((l) => l.accountCode === account.code && l.status === 'ACTIVE')
-  if (lease) throw httpError('账号使用中，请先强制回收再删除', 409)
-  state.accounts = state.accounts.filter((a) => a.id !== id)
+  if (accountHasHistory(account)) throw httpError('账号已有使用历史，不能删除；请使用禁用以保留连续使用入口', 409)
+  state.accounts = state.accounts.filter((a) => a.id !== account.id)
+  mockState.pool = mockState.pool.filter((a) => a.id !== account.id)
   return { accountId: id }
 }
 

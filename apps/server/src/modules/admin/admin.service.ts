@@ -32,6 +32,7 @@ export interface AdminAccountView {
   createdAt: string;
   /** false = 密码仍是占位值（seed/导入），需执行「重置密码」后才可领用。 */
   passwordProvisioned: boolean;
+  hasUsageHistory: boolean;
 }
 
 export interface AdminLeaseView {
@@ -55,6 +56,7 @@ interface AccountListRow {
   created_at: string;
   current_user: string | null;
   current_password_ciphertext: string | null;
+  has_usage_history: number;
 }
 
 interface LeaseListRow {
@@ -142,6 +144,7 @@ export class AdminService {
       .prepare(
         `SELECT a.id, a.code, a.username, a.status, a.last_password_changed_at, a.enabled, a.created_at,
                 a.current_password_ciphertext,
+                EXISTS(SELECT 1 FROM leases h WHERE h.account_id = a.id) AS has_usage_history,
                 u.display_name AS current_user
          FROM scienceing_accounts a
          LEFT JOIN leases l ON l.account_id = a.id AND l.status = ?
@@ -160,6 +163,7 @@ export class AdminService {
       enabled: row.enabled === 1,
       createdAt: row.created_at,
       passwordProvisioned: isPasswordProvisioned(row.id, row.current_password_ciphertext),
+      hasUsageHistory: Boolean(row.has_usage_history),
     }));
   }
 
@@ -353,7 +357,13 @@ export class AdminService {
     if (fields.length > 0) {
       fields.push('updated_at = ?');
       values.push(nowIso());
-      db.prepare(`UPDATE scienceing_accounts SET ${fields.join(', ')} WHERE id = ?`).run(...values, accountId);
+      const replacing = username && username !== account.username;
+      const updated = db.prepare(
+        `UPDATE scienceing_accounts SET ${fields.join(', ')} WHERE id = ?${replacing ? ' AND NOT EXISTS (SELECT 1 FROM leases WHERE account_id = scienceing_accounts.id)' : ''}`,
+      ).run(...values, accountId);
+      if (replacing && Number(updated.changes) === 0) {
+        throw new ConflictException({ code: 'ACCOUNT_HAS_HISTORY', message: '账号已有使用历史，不能替换科应账号；请新增账号或禁用原账号' });
+      }
     }
 
     this.audit.record({
@@ -384,6 +394,7 @@ export class AdminService {
       .prepare(
         `SELECT a.id, a.code, a.username, a.status, a.last_password_changed_at, a.enabled, a.created_at,
                 a.current_password_ciphertext,
+                EXISTS(SELECT 1 FROM leases h WHERE h.account_id = a.id) AS has_usage_history,
                 u.display_name AS current_user
          FROM scienceing_accounts a
          LEFT JOIN leases l ON l.account_id = a.id AND l.status = ?
@@ -401,6 +412,7 @@ export class AdminService {
       enabled: row.enabled === 1,
       createdAt: row.created_at,
       passwordProvisioned: isPasswordProvisioned(row.id, row.current_password_ciphertext),
+      hasUsageHistory: Boolean(row.has_usage_history),
     };
   }
 
@@ -469,28 +481,22 @@ export class AdminService {
 
   /**
    * 删除科应账号（PRD §37 管理动作，不可逆）。
-   * 有活动租约时禁止删除（应先回收）；否则按子表→父表顺序级联删除其
-   * reset_jobs / audit_logs / leases 后删除账号行。删除动作本身产生的审计记录
+   * 有使用历史时禁止删除（可禁用）；否则按子表→父表顺序删除其
+   * reset_jobs / audit_logs 后删除账号行。删除动作本身产生的审计记录
    * 因账号行已不存在，account_id 置 NULL，原账号 ID 存于 metadata 追溯。
    */
   deleteAccount(accountId: number, adminUser: AuthUser): { accountId: number } {
     const account = this.getAccount(accountId);
     const db = this.dbService.db;
 
-    const activeLease = db
-      .prepare('SELECT id FROM leases WHERE account_id = ? AND status = ?')
-      .get(accountId, LEASE_STATUS.ACTIVE) as unknown as { id: number } | undefined;
-    if (activeLease) {
-      throw new ConflictException('账号使用中，请先强制回收再删除');
-    }
-
     db.exec('BEGIN IMMEDIATE');
     try {
-      // 子表先删、父表后删：reset_jobs / audit_logs 的 lease_id 都引用 leases(id)，
-      // 必须先删它们再删 leases，否则历史 reset_job/audit 行会触发外键失败。
+      if (db.prepare('SELECT 1 FROM leases WHERE account_id = ? LIMIT 1').get(accountId)) {
+        throw new ConflictException({ code: 'ACCOUNT_HAS_HISTORY', message: '账号已有使用历史，不能删除；请使用禁用以保留连续使用入口' });
+      }
+      // 无租约历史才允许删除；其余子表先于账号删除，避免外键失败。
       db.prepare('DELETE FROM reset_jobs WHERE account_id = ?').run(accountId);
       db.prepare('DELETE FROM audit_logs WHERE account_id = ?').run(accountId);
-      db.prepare('DELETE FROM leases WHERE account_id = ?').run(accountId);
       db.prepare('DELETE FROM scienceing_accounts WHERE id = ?').run(accountId);
       db.exec('COMMIT');
     } catch (err) {

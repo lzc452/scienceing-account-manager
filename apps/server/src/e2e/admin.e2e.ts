@@ -202,3 +202,39 @@ test('审计日志写入且不含敏感值', async () => {
     assert.ok(!/ciphertext/i.test(meta), '审计 metadata 不得含 ciphertext');
   }
 });
+
+test('有历史的账号不能删除或替换登录名，编号修改及停用恢复保留历史', async () => {
+  const path = '/api/admin/accounts/1';
+  const history = db.prepare('SELECT COUNT(*) AS c FROM leases WHERE account_id = 1').get() as { c: number };
+  assert.ok(history.c > 0);
+  const deleted = await request(app.getHttpServer()).delete(path).set('Authorization', `Bearer ${adminToken}`);
+  assert.equal(deleted.status, 409);
+  assert.equal(deleted.body.code, 'ACCOUNT_HAS_HISTORY');
+  const renamed = await request(app.getHttpServer()).patch(path).set('Authorization', `Bearer ${adminToken}`)
+    .send({ username: 'different-scienceing-account', code: 'WRONG-CODE' });
+  assert.equal(renamed.status, 409);
+  assert.equal(renamed.body.code, 'ACCOUNT_HAS_HISTORY');
+  const row = db.prepare('SELECT username, code FROM scienceing_accounts WHERE id = 1').get() as { username: string; code: string };
+  assert.equal(row.code, 'KY-01');
+  assert.notEqual(row.username, 'different-scienceing-account');
+  const display = await request(app.getHttpServer()).patch(path).set('Authorization', `Bearer ${adminToken}`).send({ code: 'DISPLAY-01' });
+  assert.equal(display.status, 200);
+  for (const action of ['disable', 'enable']) {
+    assert.equal((await request(app.getHttpServer()).post(`${path}/${action}`).set('Authorization', `Bearer ${adminToken}`).send({})).status, 201);
+  }
+  const after = db.prepare('SELECT COUNT(*) AS c FROM leases WHERE account_id = 1').get() as { c: number };
+  assert.equal(after.c, history.c);
+  const mine = await request(app.getHttpServer()).get('/api/accounts/mine').set('Authorization', `Bearer ${userToken}`);
+  assert.equal(mine.body.find((a: { accountId: number }) => a.accountId === 1).code, 'DISPLAY-01');
+});
+
+test('未使用账号仍可修正登录名和删除', async () => {
+  const created = await request(app.getHttpServer()).post('/api/admin/accounts').set('Authorization', `Bearer ${adminToken}`)
+    .send({ code: 'UNUSED', username: 'unused-scienceing-account' });
+  assert.equal(created.status, 201);
+  const path = `/api/admin/accounts/${created.body.id}`;
+  const renamed = await request(app.getHttpServer()).patch(path).set('Authorization', `Bearer ${adminToken}`)
+    .send({ username: 'corrected-unused-account' });
+  assert.equal(renamed.status, 200);
+  assert.equal((await request(app.getHttpServer()).delete(path).set('Authorization', `Bearer ${adminToken}`)).status, 200);
+});

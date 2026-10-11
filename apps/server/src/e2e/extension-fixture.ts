@@ -30,13 +30,13 @@ export async function issueExtensionProof(
   return response.body.proof as string;
 }
 
-export async function claimAsExtension(app: INestApplication, userToken: string, version = '1.0.0') {
+export async function claimAsExtension(app: INestApplication, userToken: string, version = '1.0.0', accountId?: number) {
   const proof = await issueExtensionProof(app, userToken, version);
   return request(app.getHttpServer())
     .post('/api/leases')
     .set('Authorization', `Bearer ${userToken}`)
     .set(extensionHeaders(version))
-    .send({ extensionProof: proof });
+    .send({ extensionProof: proof, accountId });
 }
 
 /** 按真实流程完成种子管理员首登改密，并返回仍有效的当前会话。 */

@@ -93,6 +93,7 @@ onBeforeUnmount(closePassword)
 const renameOpen = ref(false)
 const renameTarget = ref(null)
 const renameValue = ref('')
+const renameCode = ref('')
 
 // 重置密码时选中的账号 id（默认为点击行，可切换）
 const resetTargetId = ref(null)
@@ -313,19 +314,21 @@ function openDialog(type, account) {
 function openRename(account) {
   renameTarget.value = account
   renameValue.value = account.username
+  renameCode.value = account.code
   renameOpen.value = true
 }
 
 async function onRenameSubmit() {
   const name = renameValue.value.trim()
-  if (!name) {
-    toast({ title: '账号名称不能为空', variant: 'destructive' })
+  const code = renameCode.value.trim()
+  if (!name || !code) {
+    toast({ title: '账号编号和名称不能为空', variant: 'destructive' })
     return
   }
   pending.value = true
   try {
-    await renameAccountApi(renameTarget.value.id, { username: name })
-    toast({ title: '账号名称已更新', description: `${renameTarget.value.code} → ${name}`, variant: 'success' })
+    await renameAccountApi(renameTarget.value.id, { username: name, code })
+    toast({ title: '账号信息已更新', description: `${code} · ${name}`, variant: 'success' })
     renameOpen.value = false
     load()
   } catch (e) {
@@ -517,6 +520,8 @@ async function onFix(account) {
                         variant="ghost"
                         size="sm"
                         class="text-ember hover:bg-status-error-soft hover:text-ember"
+                        :disabled="account.hasUsageHistory"
+                        :title="account.hasUsageHistory ? '已有使用历史，请使用禁用以保留连续使用入口' : '删除未使用的账号'"
                         @click="confirmDelete(account)"
                       >
                         删除
@@ -569,14 +574,18 @@ async function onFix(account) {
     <!-- 修改账号名称（对应科应平台账号） -->
     <Dialog
       :open="renameOpen"
-      :title="`修改账号名称 ${renameTarget?.code ?? ''}`"
-      description="账号名称对应科应平台账号，重置密码等自动化流程依据该名称定位账号。"
+      :title="`编辑账号 ${renameTarget?.code ?? ''}`"
+      :description="renameTarget?.hasUsageHistory ? '已有使用历史，只能修改展示编号；停止使用时请禁用账号以保留历史。' : '账号名称对应科应平台的登录账号，使用后将不能替换。'"
       @update:open="renameOpen = false"
     >
       <form class="flex flex-col gap-4" @submit.prevent="onRenameSubmit">
         <div>
-          <Label>账号名称</Label>
-          <Input v-model="renameValue" placeholder="例如 ky-01" class="mt-1.5" />
+          <Label for="account-rename-code">展示编号</Label>
+          <Input id="account-rename-code" v-model="renameCode" placeholder="例如 KY-01" class="mt-1.5" />
+        </div>
+        <div>
+          <Label for="account-rename-login">账号名称</Label>
+          <Input id="account-rename-login" v-model="renameValue" :disabled="renameTarget?.hasUsageHistory" placeholder="例如 ky-01" class="mt-1.5" />
         </div>
       </form>
       <template #footer>
@@ -613,7 +622,7 @@ async function onFix(account) {
       :open="deleteOpen"
       title="删除账号"
       destructive
-      :description="`确认删除「${deleteTarget?.code ?? ''}${deleteTarget?.username ? `（${deleteTarget.username}）` : ''}」？该操作不可撤销，相关租约与审计记录一并清除。`"
+      :description="`确认删除未使用的账号「${deleteTarget?.code ?? ''}${deleteTarget?.username ? `（${deleteTarget.username}）` : ''}」？该操作不可撤销。有使用历史的账号只能禁用，不能删除。`"
       @update:open="deleteOpen = false"
     >
       <template #footer>

@@ -59,13 +59,14 @@ apps/extension/
 ```text
 看板广播 → 扩展：{ source:'scienceing-dashboard', type:'EXTENSION_PING' }
 扩展应答 → 看板：{ source:'scienceing-extension', type:'EXTENSION_READY',
-                    version:'1.0.0', status:'ready'|'outdated'|'error',
-                    minimumVersion:'1.0.0', latestVersion:'1.2.0' }
+                    version:'1.4.0', status:'ready'|'outdated'|'error',
+                    minimumVersion:'1.0.0', latestVersion:'1.4.0', supportsAccountSelection:true }
 ```
 
 - 看板侧 3 秒内未收到 `EXTENSION_READY` 判「未安装」，禁用领取（PRD §10）。
 - `status` 语义：`ready` 就绪；`outdated` 版本低于 `GET /api/extension/config` 的 `minimumVersion`（禁止领取，PRD §11/R4）；`error` 后端不可达（PRD §45 系统不可用，看板应禁领取）。
 - 额外提供 document 自定义事件 `scienceing:extension-ready`（detail 同 EXTENSION_READY），看板可不实现 ping 广播而直接监听。
+- `supportsAccountSelection` 为 true 才启用定向领取；旧扩展缺少此字段时保持禁用，防止丢弃账号编号后普通领取。
 
 看板侧最小接线（apps/web，非本包范围，供前端对接参考）：
 
@@ -81,16 +82,21 @@ window.addEventListener('message', (e) => {
 
 | 方向 | 消息 | 载荷 → 返回 |
 |---|---|---|
-| dashboard → worker | `EXTENSION_INFO` | → `{ version, status, minimumVersion, latestVersion }` |
-| dashboard → worker | `CLAIM_LEASE` | `{ authToken }` → 扩展先申请一次性证明，再领取账号；返回 `{ ok, data?, error? }` |
+| dashboard → worker | `EXTENSION_INFO` | → `{ version, status, minimumVersion, latestVersion, supportsAccountSelection }` |
+| dashboard → worker | `CLAIM_LEASE` | `{ authToken, accountId? }` → 扩展先申请一次性证明，再领取账号；返回 `{ ok, data?, error? }` |
 | dashboard → worker | `BIND_AND_OPEN` | `{ leaseId, leaseToken, accountCode? }` → `{ ok, leaseId, tabId }` |
 | scienceing → worker | `GET_TAB_LEASE` | → `{ bound, leaseId?, accountCode? }` |
 | scienceing → worker | `GET_LEASE_STATUS` | `{ leaseId }` → `{ ok, leaseId, status }` |
 | scienceing → worker | `REPORT_ACTIVITY` | `{ leaseId }` → `{ ok, reported }`（worker 5~10s 节流合并后 POST） |
 | scienceing → worker | `OPEN_DASHBOARD` | `{ path }` → `{ ok, tabId }`（立即归还确认 / 返回看板跳转） |
 | worker → scienceing tab | `LEASE_STATUS`（含 config 阈值）/ `LEASE_RELEASED` / `LEASE_SERVICE_ERROR` | 状态推送（驱动悬浮窗） |
+| worker → scienceing tab | `LEASE_BOUND` / `LEASE_UNBOUND` | `{ leaseId?, accountCode? }`，晚绑定启用操作监听，离开受支持域名后停止续期 |
 
 领取时，worker 以 `chrome-extension://<runtime.id>` Origin 调用 `POST /api/extension/claim-proof`，再把短时一次性 `extensionProof` 提交给 `POST /api/leases`。证明绑定当前用户、扩展 ID 与版本且消费后失效；普通看板页面仅伪造请求体版本号无法领取。企业部署建议同时设置后端 `SCIENCEING_EXTENSION_IDS` 白名单。
+
+1.4.0 起，`CLAIM_LEASE` 可携带正整数 `accountId`，内容脚本和后台完整转发至领取请求。失败直接返回状态及错误 code，不改为普通领取。成功领取的 token 会更新当前租约，旧 token 的迟到轮询响应不会清除新绑定。
+
+新标签先保存可信父标签的候选绑定，确认网址属于 `SCIENCEING_ORIGINS` 后才绑定；候选与绑定均保存在会话存储中，后台恢复完成后再处理事件。无法确认的页面显示未绑定，由用户从看板重新打开。外部网站不继承租约，父标签关闭不影响已绑定子标签。租约进入回收或其他非 ACTIVE 状态后清除全部绑定和待发续期计时器。
 
 ## Activity 与悬浮窗（t10，PRD §17/§18/§20/§21/§22/§44）
 
@@ -108,7 +114,7 @@ window.addEventListener('message', (e) => {
 
 1. **看板检测版本**：打开看板页 Console 执行 `window.postMessage({source:'scienceing-dashboard',type:'EXTENSION_PING'},'*')`，`message` 事件应收 `EXTENSION_READY`（version/status）。
 2. **绑定**：`window.postMessage({source:'scienceing-dashboard',type:'BIND_AND_OPEN',leaseId:1,leaseToken:'<token>'},'*')`；Service Worker 控制台（`chrome://extensions` → 本扩展 → 检查视图 service worker）应打印 `BIND_AND_OPEN { tabId, leaseId }`。
-3. **多 Tab 继承**：已绑定科应 Tab 内 Ctrl+点击链接，Worker 控制台应打印 `inherit { tabId, openerTabId, leaseId }`。
+3. **多 Tab 继承**：已绑定科应 Tab 内 Ctrl+点击链接，受支持域名的新页面应显示同一租约的倒计时；关闭父页面后子页面仍可正常续期。
 
 ### t10（Activity / 悬浮窗）
 
@@ -127,8 +133,7 @@ window.addEventListener('message', (e) => {
 
 ```bash
 pnpm --filter @scienceing/extension build   # 结构 + 最小权限审计
-pnpm --filter @scienceing/extension test    # 版本比较单测（node:test）
+pnpm --filter @scienceing/extension test    # 版本、领取、标签绑定与内容脚本行为（node:test）
 ```
 
-> 注：受限沙箱禁止 `node --test` 的多文件 runner spawn（EPERM），故测试脚本直接执行
-> `node test/version.test.mjs`（node:test 作为主模块运行不 spawn，同样输出 pass/fail 并影响退出码）。
+连续使用的一期边界、接口与验收见 `docs/superpowers/specs/2026-10-10-account-continuity-design.md`。

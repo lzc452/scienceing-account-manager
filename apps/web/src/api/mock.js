@@ -30,8 +30,10 @@ const state = reactive({
     { id: 9, code: 'KY-09', status: 'AVAILABLE' },
     { id: 10, code: 'KY-10', status: 'AVAILABLE' },
   ],
-  lease: null,
+  leases: [],
 })
+
+export { state as mockState }
 
 // firstLoginAt/mustChangePassword 与真实后端 UserDto 同形（t14）。
 // admin/zhangsan 已登录过且无需强制改密；xinyuan 为「首次登录强制改密」演示账号。
@@ -53,9 +55,10 @@ function delay(ms = 250) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function httpError(message, status) {
+function httpError(message, status, code = null) {
   const err = new Error(message)
   err.status = status
+  err.code = code
   return err
 }
 
@@ -78,11 +81,25 @@ function availability() {
 
 /** 公开池列表：游客不暴露使用人姓名（PRD §35）。形状对齐 GET /api/accounts/pool。 */
 function pool() {
-  return state.pool.map((a) => ({
+  return state.pool.filter((a) => a.enabled !== false).map((a) => ({
     code: a.code,
     status: a.status,
     estimatedReleaseAt: a.expiresAt ?? null,
   }))
+}
+
+function mine() {
+  requireAuth()
+  return state.pool.map((account) => ({
+    accountId: account.id,
+    code: account.code,
+    status: account.status,
+    enabled: account.enabled !== false,
+    lastUsedAt: state.leases.filter((lease) => lease.userId === state.user.id && lease.accountId === account.id)
+      .map((lease) => lease.startedAt).sort().at(-1) ?? null,
+    estimatedReleaseAt: account.status === 'IN_USE' ? account.expiresAt ?? null : null,
+  })).filter((account) => account.enabled || account.lastUsedAt)
+    .sort((a, b) => (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? '') || a.code.localeCompare(b.code))
 }
 
 function toUserDto(user) {
@@ -93,16 +110,19 @@ function toUserDto(user) {
 
 function toLeaseDto(lease) {
   const rest = { ...lease }
+  const account = state.pool.find((a) => a.id === lease.accountId)
+  if (account) rest.accountCode = account.code
   delete rest.leaseToken
   delete rest.password
   return rest
 }
 
 function toAccountDto(lease) {
+  const account = state.pool.find((a) => a.id === lease.accountId)
   return {
     accountId: lease.accountId,
-    code: lease.accountCode,
-    username: lease.accountUsername,
+    code: account?.code ?? lease.accountCode,
+    username: account?.username ?? lease.accountUsername,
     password: lease.password,
   }
 }
@@ -154,17 +174,36 @@ async function changePassword(currentPassword, newPassword) {
   return state.user
 }
 
-async function claim() {
+async function claim(accountId) {
   await delay()
   requireAuth()
 
-  // R2：已有活动租约 → 直接返回既有租约（轮换 token）
-  if (state.lease && state.lease.status === 'ACTIVE') {
-    state.lease.leaseToken = `mock-lease-token-${state.lease.accountId}-${Date.now()}`
-    return { leaseToken: state.lease.leaseToken, lease: toLeaseDto(state.lease), account: toAccountDto(state.lease) }
+  if (accountId !== undefined && (!Number.isSafeInteger(accountId) || accountId <= 0)) {
+    throw httpError('accountId 必须为正整数', 400)
   }
 
-  const account = state.pool.find((a) => a.status === 'AVAILABLE')
+  // R2：已有活动租约 → 直接返回既有租约（轮换 token）
+  const existing = state.leases.find((lease) => lease.userId === state.user.id && lease.status === 'ACTIVE')
+  if (existing) {
+    if (accountId !== undefined && existing.accountId !== accountId) {
+      throw httpError('您已持有其他账号，请先归还后再领取指定账号', 409, 'ACTIVE_LEASE_CONFLICT')
+    }
+    existing.leaseToken = `mock-lease-token-${existing.accountId}-${Date.now()}`
+    return { leaseToken: existing.leaseToken, lease: toLeaseDto(existing), account: toAccountDto(existing) }
+  }
+
+  const account = accountId === undefined
+    ? state.pool.find((a) => a.status === 'AVAILABLE' && a.enabled !== false && a.passwordProvisioned !== false)
+    : state.pool.find((a) => a.id === accountId)
+  if (accountId !== undefined) {
+    if (!account) throw httpError('指定账号不存在', 404)
+    if (account.enabled === false || account.status !== 'AVAILABLE') {
+      throw httpError('指定账号暂不可领取，请刷新状态后重试', 409, 'TARGET_ACCOUNT_UNAVAILABLE')
+    }
+    if (account.passwordProvisioned === false) {
+      throw httpError('指定账号尚未配置密码，请联系管理员重置密码', 409, 'ACCOUNT_NOT_PROVISIONED')
+    }
+  }
   if (!account) {
     throw httpError('暂无可用账号', 409)
   }
@@ -173,7 +212,8 @@ async function claim() {
   account.expiresAt = isoFromNow(INACTIVITY_TIMEOUT_SECONDS)
   const now = nowIso()
   const lease = {
-    id: Date.now(),
+    id: state.leases.length + 1,
+    userId: state.user.id,
     accountId: account.id,
     accountCode: account.code,
     accountUsername: account.code.toLowerCase(),
@@ -189,44 +229,45 @@ async function claim() {
     releasedAt: null,
     releaseReason: null,
   }
-  state.lease = lease
+  state.leases.push(lease)
   return { leaseToken: lease.leaseToken, lease: toLeaseDto(lease), account: toAccountDto(lease) }
 }
 
 async function current() {
   await delay()
   requireAuth()
-  if (!state.lease || state.lease.status !== 'ACTIVE') {
+  const lease = state.leases.find((lease) => lease.userId === state.user.id && lease.status === 'ACTIVE')
+  if (!lease) {
     return { lease: null, account: null }
   }
-  const remaining = remainingOf(state.lease)
-  state.lease.remainingSeconds = remaining
-  const account = state.pool.find((a) => a.id === state.lease.accountId)
+  const remaining = remainingOf(lease)
+  lease.remainingSeconds = remaining
+  const account = state.pool.find((a) => a.id === lease.accountId)
   if (account) account.remainingSeconds = remaining
-  return { lease: toLeaseDto(state.lease), account: toAccountDto(state.lease) }
+  return { lease: toLeaseDto(lease), account: toAccountDto(lease) }
 }
 
 async function release(id) {
   await delay()
   requireAuth()
-  if (!state.lease || state.lease.id !== id) {
+  const lease = state.leases.find((lease) => lease.id === id && lease.userId === state.user.id)
+  if (!lease) {
     throw httpError('租约不存在', 404)
   }
-  state.lease.status = 'RECYCLING'
-  state.lease.releaseReason = 'USER_RETURN'
-  state.lease.releaseRequestedAt = nowIso()
-  const account = state.pool.find((a) => a.id === state.lease.accountId)
+  if (lease.status !== 'ACTIVE') throw httpError('租约已不在使用中', 409)
+  lease.status = 'RECYCLING'
+  lease.releaseReason = 'USER_RETURN'
+  lease.releaseRequestedAt = nowIso()
+  const account = state.pool.find((a) => a.id === lease.accountId)
   if (account) account.status = 'RECYCLING'
 
   // 模拟 Playwright 改密完成后账号回到可用（5 秒后释放）
-  const lease = state.lease
   setTimeout(() => {
-    if (state.lease === lease && state.lease.status === 'RECYCLING') {
-      state.lease.status = 'RELEASED'
-      state.lease.releasedAt = nowIso()
-      const acc = state.pool.find((a) => a.id === state.lease.accountId)
+    if (lease.status === 'RECYCLING') {
+      lease.status = 'RELEASED'
+      lease.releasedAt = nowIso()
+      const acc = state.pool.find((a) => a.id === lease.accountId)
       if (acc) acc.status = 'AVAILABLE'
-      state.lease = null
     }
   }, 5000)
 
@@ -286,6 +327,7 @@ export const mockApi = {
   changePassword,
   availability,
   pool,
+  mine,
   claim,
   current,
   release,

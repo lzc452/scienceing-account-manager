@@ -1,10 +1,14 @@
 import 'reflect-metadata';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import request from 'supertest';
 import { type INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { type DatabaseSync } from 'node:sqlite';
+import { backup, type DatabaseSync } from 'node:sqlite';
 import { AppModule } from '../app.module';
 import { DatabaseService } from '../db/database.service';
 import { seedDatabase } from '../db/seed';
@@ -20,6 +24,7 @@ import {
 
 const MASTER_KEY_HEX = '06bd85dc11dd5998a014a042afb70e714c41f6d46a94b1b119cfd26bff999e54';
 const ADMIN_PASSWORD = 'admin123456';
+const DATABASE_PATH = join(tmpdir(), `scienceing-leases-${randomUUID()}.db`);
 
 let app: INestApplication;
 let db: DatabaseSync;
@@ -34,7 +39,7 @@ function resetPool(): void {
   db.exec('DELETE FROM audit_logs');
   db.exec('DELETE FROM reset_jobs');
   db.exec('DELETE FROM leases');
-  db.exec("UPDATE scienceing_accounts SET status = 'AVAILABLE'");
+  db.exec("UPDATE scienceing_accounts SET status = 'AVAILABLE', enabled = 1");
 }
 
 before(async () => {
@@ -44,6 +49,7 @@ before(async () => {
   app = await NestFactory.create(AppModule);
   app.setGlobalPrefix('api');
   await app.init();
+  await app.listen(0, '127.0.0.1'); // 并发请求复用同一监听端口，避免测试客户端反复启停服务器。
   db = app.get(DatabaseService).db;
   const masterKey = Buffer.from(MASTER_KEY_HEX, 'hex');
   await seedDatabase(db, { adminPassword: ADMIN_PASSWORD, masterKey });
@@ -65,6 +71,7 @@ before(async () => {
 
 after(async () => {
   await app.close();
+  for (const suffix of ['', '-wal', '-shm']) rmSync(`${DATABASE_PATH}${suffix}`, { force: true });
 });
 
 test('游客可访问 availability 统计（不泄露密码/使用人）', async () => {
@@ -199,6 +206,134 @@ test('R2：同用户重复领取返回同一账号，不新增租约', async () 
 
   const totalActive = db.prepare("SELECT COUNT(*) AS c FROM leases WHERE status = 'ACTIVE'").get() as unknown as { c: number };
   assert.equal(totalActive.c, 1);
+});
+
+test('定向领取准确返回目标，同账号重入，不同账号冲突且不轮换原 token', async () => {
+  resetPool();
+  const first = await claimAsExtension(app, u1Token, '1.4.0', 3);
+  assert.equal(first.status, 201);
+  assert.equal(first.body.lease.accountId, 3);
+  const again = await claimAsExtension(app, u1Token, '1.4.0', 3);
+  assert.equal(again.body.lease.id, first.body.lease.id);
+  const conflict = await claimAsExtension(app, u1Token, '1.4.0', 6);
+  assert.equal(conflict.status, 409);
+  assert.equal(conflict.body.code, 'ACTIVE_LEASE_CONFLICT');
+  const status = await request(app.getHttpServer()).get(`/api/leases/${again.body.lease.id}/status`)
+    .set('Authorization', `Bearer ${again.body.leaseToken}`);
+  assert.equal(status.status, 200);
+  assert.equal((db.prepare('SELECT status FROM scienceing_accounts WHERE id = 6').get() as { status: string }).status, 'AVAILABLE');
+  assert.equal((db.prepare('SELECT COUNT(*) AS c FROM leases').get() as { c: number }).c, 1);
+});
+
+test('非法目标与旧扩展拒绝定向领取，普通旧扩展仍兼容', async () => {
+  resetPool();
+  for (const accountId of [0, -1, 1.5, '3', null, Number.MAX_SAFE_INTEGER + 1]) {
+    const proof = await issueExtensionProof(app, u1Token, '1.4.0');
+    const response = await request(app.getHttpServer()).post('/api/leases')
+      .set('Authorization', `Bearer ${u1Token}`).set(extensionHeaders('1.4.0'))
+      .send({ extensionProof: proof, accountId });
+    assert.equal(response.status, 400);
+  }
+  const missing = await claimAsExtension(app, u1Token, '1.4.0', 99999);
+  assert.equal(missing.status, 404);
+  const old = await claimAsExtension(app, u1Token, '1.3.0', 3);
+  assert.equal(old.status, 409);
+  assert.equal(old.body.code, 'EXTENSION_OUTDATED');
+  assert.equal((db.prepare('SELECT COUNT(*) AS c FROM leases').get() as { c: number }).c, 0);
+  assert.equal((await claimAsExtension(app, u1Token, '1.0.0')).status, 201);
+});
+
+test('目标被占用、回收、异常、停用或无密码时不领取其他账号', async () => {
+  resetPool();
+  for (const status of ['IN_USE', 'RECYCLING', 'ERROR']) {
+    db.prepare('UPDATE scienceing_accounts SET status = ? WHERE id = 3').run(status);
+    const response = await claimAsExtension(app, u1Token, '1.4.0', 3);
+    assert.equal(response.status, 409);
+    assert.equal(response.body.code, 'TARGET_ACCOUNT_UNAVAILABLE');
+  }
+  db.exec("UPDATE scienceing_accounts SET status = 'AVAILABLE', enabled = 0 WHERE id = 3");
+  assert.equal((await claimAsExtension(app, u1Token, '1.4.0', 3)).body.code, 'TARGET_ACCOUNT_UNAVAILABLE');
+  const original = db.prepare('SELECT current_password_ciphertext FROM scienceing_accounts WHERE id = 3').get() as { current_password_ciphertext: string };
+  try {
+    db.exec('UPDATE scienceing_accounts SET enabled = 1, current_password_ciphertext = NULL WHERE id = 3');
+    assert.equal((await claimAsExtension(app, u1Token, '1.4.0', 3)).body.code, 'ACCOUNT_NOT_PROVISIONED');
+  } finally {
+    db.prepare('UPDATE scienceing_accounts SET current_password_ciphertext = ? WHERE id = 3').run(original.current_password_ciphertext);
+  }
+  assert.equal((db.prepare('SELECT COUNT(*) AS c FROM leases').get() as { c: number }).c, 0);
+  assert.equal((db.prepare('SELECT status FROM scienceing_accounts WHERE id = 1').get() as { status: string }).status, 'AVAILABLE');
+});
+
+test('定向并发：两人争同账号、一人争两个账号，均只有一个活动租约', async () => {
+  resetPool();
+  const twoUsers = await Promise.all([
+    claimAsExtension(app, u1Token, '1.4.0', 3), claimAsExtension(app, u2Token, '1.4.0', 3),
+  ]);
+  assert.deepEqual(twoUsers.map((r) => r.status).sort(), [201, 409]);
+  resetPool();
+  const sameUser = await Promise.all([
+    claimAsExtension(app, u1Token, '1.4.0', 3), claimAsExtension(app, u1Token, '1.4.0', 6),
+  ]);
+  assert.deepEqual(sameUser.map((r) => r.status).sort(), [201, 409]);
+  assert.equal((db.prepare("SELECT COUNT(*) AS c FROM leases WHERE status = 'ACTIVE'").get() as { c: number }).c, 1);
+});
+
+test('本人历史去重排序、停用保留、用户隔离，退出登录与服务重启后可返回原账号', async () => {
+  resetPool();
+  const restart = async () => {
+    await app.close();
+    process.env.DATABASE_PATH = DATABASE_PATH;
+    process.env.SCIENCEING_MASTER_KEY = MASTER_KEY_HEX;
+    app = await NestFactory.create(AppModule);
+    app.setGlobalPrefix('api');
+    await app.listen(0, '127.0.0.1');
+    db = app.get(DatabaseService).db;
+  };
+  // 同进程其他用例会改环境变量，在用例内切换文件库后再验证完整的重启路径。
+  await backup(db, DATABASE_PATH);
+  await restart();
+  assert.equal((await request(app.getHttpServer()).get('/api/accounts/mine')).status, 401);
+  const releaseForTest = async (leaseId: number, accountId: number) => {
+    assert.equal((await request(app.getHttpServer()).post(`/api/leases/${leaseId}/release`)
+      .set('Authorization', `Bearer ${u1Token}`).send({})).status, 201);
+    // 模拟已验证过的回收完成状态，历史记录保持不变。
+    db.prepare("UPDATE leases SET status = 'RELEASED', released_at = ? WHERE id = ?").run(nowIso(), leaseId);
+    db.prepare("UPDATE scienceing_accounts SET status = 'AVAILABLE' WHERE id = ?").run(accountId);
+  };
+  const first = await claimAsExtension(app, u1Token, '1.4.0', 3);
+  await releaseForTest(first.body.lease.id, 3);
+  const second = await claimAsExtension(app, u1Token, '1.4.0', 3);
+  await releaseForTest(second.body.lease.id, 3);
+  db.prepare('UPDATE leases SET started_at = ? WHERE account_id = 3').run(nowIso(-60_000));
+  const latest = await claimAsExtension(app, u1Token, '1.4.0', 6);
+  await releaseForTest(latest.body.lease.id, 6);
+  await claimAsExtension(app, u2Token, '1.4.0', 7);
+  db.exec('UPDATE scienceing_accounts SET enabled = 0 WHERE id IN (3, 4)');
+  const mine = await request(app.getHttpServer()).get('/api/accounts/mine').set('Authorization', `Bearer ${u1Token}`);
+  assert.equal(mine.status, 200);
+  assert.deepEqual(mine.body.filter((a: { lastUsedAt: string | null }) => a.lastUsedAt).map((a: { accountId: number }) => a.accountId), [6, 3]);
+  assert.equal(mine.body.find((a: { accountId: number }) => a.accountId === 3).enabled, false);
+  assert.equal(mine.body.some((a: { accountId: number }) => a.accountId === 4), false);
+  assert.equal(mine.body.find((a: { accountId: number }) => a.accountId === 7).lastUsedAt, null);
+  assert.ok(mine.body.every((a: Record<string, unknown>) => Object.keys(a).sort().join(',') === 'accountId,code,enabled,estimatedReleaseAt,lastUsedAt,status'));
+  const other = await request(app.getHttpServer()).get('/api/accounts/mine').set('Authorization', `Bearer ${u2Token}`);
+  assert.equal(other.body.some((a: { accountId: number }) => a.accountId === 3), false);
+  assert.equal(other.body.find((a: { accountId: number }) => a.accountId === 6).lastUsedAt, null);
+  db.exec('UPDATE scienceing_accounts SET enabled = 1 WHERE id = 3');
+  await request(app.getHttpServer()).post('/api/auth/logout').set('Authorization', `Bearer ${u1Token}`).send({});
+  const login = await request(app.getHttpServer()).post('/api/auth/login').send({ username: 'u1', password: 'u1-pass' });
+  u1Token = login.body.token as string;
+  const afterLogin = await request(app.getHttpServer()).get('/api/accounts/mine').set('Authorization', `Bearer ${u1Token}`);
+  assert.ok(afterLogin.body.find((a: { accountId: number }) => a.accountId === 3).lastUsedAt);
+  const resumed = await claimAsExtension(app, u1Token, '1.4.0', 3);
+  assert.equal(resumed.status, 201);
+  assert.equal(resumed.body.lease.accountId, 3);
+  const beforeRestart = await request(app.getHttpServer()).get('/api/accounts/mine').set('Authorization', `Bearer ${u1Token}`);
+  await restart();
+  const afterRestart = await request(app.getHttpServer()).get('/api/accounts/mine').set('Authorization', `Bearer ${u1Token}`);
+  assert.equal(afterRestart.status, 200);
+  assert.deepEqual(afterRestart.body, beforeRestart.body);
+  assert.equal((await claimAsExtension(app, u1Token, '1.4.0', 3)).body.lease.id, resumed.body.lease.id);
 });
 
 test('Activity 续期/过期状态机 + 归还创建 reset_job', async () => {

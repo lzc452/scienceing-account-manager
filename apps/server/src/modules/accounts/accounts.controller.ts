@@ -1,5 +1,8 @@
-import { Controller, Get } from '@nestjs/common';
-import { AccountsService, type AccountAvailability, type AccountPoolItem } from './accounts.service';
+import { Controller, Get, UseGuards } from '@nestjs/common';
+import { AccountsService, type AccountAvailability, type AccountPoolItem, type AccountContinuityItem } from './accounts.service';
+import { AuthGuard } from '../../guards/auth.guard';
+import { CurrentUser } from '../../guards/current-user.decorator';
+import type { AuthUser } from '../auth/auth.types';
 
 @Controller('accounts')
 export class AccountsController {
@@ -13,5 +16,11 @@ export class AccountsController {
   @Get('pool')
   pool(): AccountPoolItem[] {
     return this.accountsService.pool();
+  }
+
+  @Get('mine')
+  @UseGuards(AuthGuard)
+  mine(@CurrentUser() user: AuthUser): AccountContinuityItem[] {
+    return this.accountsService.mine(user.id);
   }
 }

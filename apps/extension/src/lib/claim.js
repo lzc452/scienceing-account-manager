@@ -17,6 +17,7 @@ function apiFailure(response, body, fallback) {
 export async function claimLeaseThroughExtension({
   apiBase,
   authToken,
+  accountId,
   extensionId,
   extensionVersion,
   request,
@@ -42,7 +43,7 @@ export async function claimLeaseThroughExtension({
     const claimResponse = await request(`${apiBase}/api/leases`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ extensionProof: proofBody.proof }),
+      body: JSON.stringify({ extensionProof: proofBody.proof, accountId }),
     });
     const claimBody = await responseBody(claimResponse);
     if (!claimResponse.ok) return apiFailure(claimResponse, claimBody, '领取账号失败');

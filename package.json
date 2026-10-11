@@ -21,6 +21,7 @@
     "test:deploy-cloud": "python scripts/test/cloud-deploy.test.py",
     "test:release-cloud": "python scripts/test/cloud-release.test.py",
     "test:password-visibility": "node --test scripts/test/password-visibility.test.mjs",
+    "test:account-continuity": "node --test scripts/test/account-continuity.test.mjs scripts/test/account-continuity-mock.test.mjs",
     "test:security-headers": "node --test scripts/test/security-headers.test.mjs",
     "test:account-crypto": "node --test scripts/test/account-password-crypto.test.mjs",
     "test:backend-invariants": "node --test scripts/test/backend-invariants.test.mjs",

@@ -39,7 +39,8 @@ export const isAdmin = computed(() => authState.user?.role === 'ADMIN')
 /** 插件状态（§4.4）。mock 模式默认就绪；真实联调时经扩展握手（t9）检测。 */
 export const pluginState = reactive({
   status: USE_MOCK ? 'ready' : 'detecting',
-  version: USE_MOCK ? '1.0.0' : '',
+  version: USE_MOCK ? '1.4.0' : '',
+  supportsAccountSelection: USE_MOCK,
   minimumVersion: '',
   latestVersion: '',
 })
@@ -90,6 +91,7 @@ function applyExtensionState(detail) {
   pluginState.version = detail?.version || ''
   pluginState.minimumVersion = detail?.minimumVersion || ''
   pluginState.latestVersion = detail?.latestVersion || ''
+  pluginState.supportsAccountSelection = detail?.supportsAccountSelection === true
   const status = detail?.status
   pluginState.status = status === 'ready' || status === 'outdated' || status === 'error' ? status : 'missing'
 }
@@ -117,7 +119,7 @@ export function loadExtensionPackage() {
   if (USE_MOCK) {
     // mock 演示态：给出一个可用的展示值（真实部署时由后端 /extension/config 提供）
     extensionPackage.available = true
-    extensionPackage.version = '1.2.0'
+    extensionPackage.version = '1.4.0'
     extensionPackage.updatedAt = new Date().toISOString()
     return Promise.resolve(extensionPackage)
   }
@@ -174,9 +176,10 @@ function persist() {
 }
 
 class ApiError extends Error {
-  constructor(message, status) {
+  constructor(message, status, code = null) {
     super(message)
     this.status = status
+    this.code = code
   }
 }
 
@@ -203,7 +206,7 @@ export async function http(method, path, body) {
     const message = Array.isArray(data?.message)
       ? data.message.join('，')
       : data?.message || `请求失败（${res.status}）`
-    throw new ApiError(message, res.status)
+    throw new ApiError(message, res.status, data?.code)
   }
   return data
 }
@@ -297,8 +300,11 @@ async function ensureExtensionToken() {
   return authState.token
 }
 
-export async function claimLease() {
-  if (USE_MOCK) return mockApi.claim()
+export async function claimLease(accountId) {
+  if (accountId !== undefined && !pluginState.supportsAccountSelection) {
+    throw new ApiError('指定账号领取需要科应账号助手 1.4.0 及以上，请升级扩展', 409, 'EXTENSION_OUTDATED')
+  }
+  if (USE_MOCK) return mockApi.claim(accountId)
 
   const authToken = await ensureExtensionToken()
   if (!authToken) throw new ApiError('未登录', 401)
@@ -323,12 +329,12 @@ export async function claimLease() {
         data?.requestId !== requestId
       ) return
       if (data.ok) finish(null, data.data)
-      else finish(new ApiError(data.error || '领取账号失败', Number(data.status || 0)))
+      else finish(new ApiError(data.error || '领取账号失败', Number(data.status || 0), data.code))
     }
 
     window.addEventListener('message', onMessage)
     window.postMessage(
-      { source: 'scienceing-dashboard', type: 'CLAIM_LEASE', requestId, authToken },
+      { source: 'scienceing-dashboard', type: 'CLAIM_LEASE', requestId, authToken, accountId },
       window.location.origin,
     )
   })
@@ -336,6 +342,10 @@ export async function claimLease() {
 
 export function getCurrentLease() {
   return USE_MOCK ? mockApi.current() : http('GET', '/leases/current')
+}
+
+export function getMyAccounts() {
+  return USE_MOCK ? mockApi.mine() : http('GET', '/accounts/mine')
 }
 
 export function releaseLease(leaseId) {

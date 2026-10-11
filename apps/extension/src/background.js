@@ -26,6 +26,7 @@ import { claimLeaseThroughExtension } from './lib/claim.js';
 import {
   API_BASE,
   SCIENCEING_URL,
+  SCIENCEING_ORIGINS,
   DASHBOARD_URL,
   POLL_INTERVAL_MS,
   CONFIG_CACHE_MS,
@@ -33,6 +34,8 @@ import {
 
 /** tabId → { leaseId, accountCode } */
 const tabLease = new Map();
+/** 新标签网址尚未确定时保存可信父标签的候选绑定。 */
+const pendingTabLease = new Map();
 /** leaseId → { leaseId, leaseToken, accountCode, status }（leaseToken 仅存内存 + session，不落盘） */
 const leases = new Map();
 /** leaseId → { lastSentAt, pending, timer }（Activity 节流状态） */
@@ -50,11 +53,12 @@ async function persist() {
   const tabLeaseObj = {};
   for (const [tabId, binding] of tabLease) tabLeaseObj[String(tabId)] = binding;
   const leasesObj = {};
+  const pendingTabLeaseObj = Object.fromEntries(pendingTabLease);
   for (const [leaseId, lease] of leases) {
     leasesObj[String(leaseId)] = { leaseId: lease.leaseId, leaseToken: lease.leaseToken, accountCode: lease.accountCode };
   }
   try {
-    if (chrome.storage?.session) await chrome.storage.session.set({ tabLease: tabLeaseObj, leases: leasesObj });
+    if (chrome.storage?.session) await chrome.storage.session.set({ tabLease: tabLeaseObj, leases: leasesObj, pendingTabLease: pendingTabLeaseObj });
   } catch {
     // 会话存储不可用时退化为纯内存（重启后绑定需重建）
   }
@@ -63,23 +67,50 @@ async function persist() {
 async function loadState() {
   try {
     if (!chrome.storage?.session) return;
-    const data = await chrome.storage.session.get(['tabLease', 'leases']);
+    const data = await chrome.storage.session.get(['tabLease', 'leases', 'pendingTabLease']);
     if (data.tabLease) for (const [k, v] of Object.entries(data.tabLease)) tabLease.set(Number(k), v);
     if (data.leases) for (const [k, v] of Object.entries(data.leases)) leases.set(Number(k), v);
+    if (data.pendingTabLease) for (const [k, v] of Object.entries(data.pendingTabLease)) pendingTabLease.set(Number(k), v);
   } catch {
     // 忽略读取失败
   }
 }
+
+const stateReady = loadState();
 
 // ---------------------------------------------------------------------------
 // 绑定与映射
 // ---------------------------------------------------------------------------
 
 function bindTab(tabId, { leaseId, accountCode }) {
+  pendingTabLease.delete(tabId);
   tabLease.set(tabId, { leaseId, accountCode: accountCode ?? null });
   const lease = leases.get(leaseId) ?? { leaseId, leaseToken: null, accountCode: null };
   lease.accountCode = lease.accountCode ?? accountCode ?? null;
   leases.set(leaseId, lease);
+  sendToTab(tabId, { type: 'LEASE_BOUND', leaseId, accountCode: lease.accountCode });
+}
+
+function isScienceingUrl(url) {
+  try {
+    return SCIENCEING_ORIGINS.includes(new URL(url).origin);
+  } catch {
+    return false;
+  }
+}
+
+function updateTabBinding(tabId, url) {
+  if (!url || url === 'about:blank') return;
+  if (!isScienceingUrl(url)) {
+    pendingTabLease.delete(tabId);
+    if (tabLease.delete(tabId)) sendToTab(tabId, { type: 'LEASE_UNBOUND' });
+    return;
+  }
+  const candidate = pendingTabLease.get(tabId);
+  if (candidate && leases.has(candidate.leaseId)) {
+    bindTab(tabId, candidate);
+    void pollLease(candidate.leaseId);
+  }
 }
 
 function storeLeaseToken(leaseId, leaseToken, accountCode) {
@@ -140,7 +171,7 @@ async function handleExtensionInfo() {
   const cfg = await getExtensionConfig();
   if (cfg.ok) {
     const status = compareVersions(version, cfg.minimumVersion) < 0 ? 'outdated' : 'ready';
-    return { version, status, minimumVersion: cfg.minimumVersion, latestVersion: cfg.latestVersion };
+    return { version, status, minimumVersion: cfg.minimumVersion, latestVersion: cfg.latestVersion, supportsAccountSelection: compareVersions(version, '1.4.0') >= 0 };
   }
   // 后端不可达：扩展仍在，但无法核对版本（PRD §45 系统不可用 → 看板应禁领取）
   return { version, status: 'error', minimumVersion: null, latestVersion: null, configError: true };
@@ -151,13 +182,19 @@ async function handleExtensionInfo() {
  * 签发并消费一次性证明，网页不再自行提交可伪造的 extensionVersion。
  */
 async function handleClaimLease(message) {
-  return claimLeaseThroughExtension({
+  const result = await claimLeaseThroughExtension({
     apiBase: API_BASE,
     authToken: message?.authToken,
+    accountId: message?.accountId,
     extensionId: chrome.runtime.id,
     extensionVersion: chrome.runtime.getManifest().version,
     request: (url, options) => fetchWithTimeout(url, options, 5000),
   });
+  if (result.ok) {
+    storeLeaseToken(result.data.lease.id, result.data.leaseToken, result.data.account.code);
+    await persist();
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -185,22 +222,29 @@ async function handleBindAndOpen(message) {
 // Tab 继承与回收（PRD §16）
 // ---------------------------------------------------------------------------
 
-chrome.tabs.onCreated.addListener((tab) => {
+chrome.tabs.onCreated.addListener(async (tab) => {
+  await stateReady;
   if (tab.id == null || tab.openerTabId == null) return;
   const parent = tabLease.get(tab.openerTabId);
-  if (!parent) return;
-  bindTab(tab.id, { leaseId: parent.leaseId, accountCode: parent.accountCode });
-  void persist();
-  console.log('[scienceing-extension] inherit', { tabId: tab.id, openerTabId: tab.openerTabId, leaseId: parent.leaseId });
-  void pollLease(parent.leaseId);
+  if (!parent || !leases.has(parent.leaseId)) return;
+  pendingTabLease.set(tab.id, { ...parent });
+  updateTabBinding(tab.id, tab.url);
+  await persist();
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => {
-  const binding = tabLease.get(tabId);
-  if (!binding) return;
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  await stateReady;
+  if (!tabLease.has(tabId) && !pendingTabLease.has(tabId)) return;
+  if (!changeInfo.url && !tab?.url) return;
+  updateTabBinding(tabId, changeInfo.url ?? tab.url);
+  await persist();
+});
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  await stateReady;
   tabLease.delete(tabId);
-  void persist();
-  console.log('[scienceing-extension] unbind', { tabId, leaseId: binding.leaseId });
+  pendingTabLease.delete(tabId);
+  await persist();
 });
 
 // ---------------------------------------------------------------------------
@@ -219,40 +263,53 @@ async function thresholdConfig() {
 async function pollLease(leaseId) {
   const lease = leases.get(leaseId);
   if (!lease || !lease.leaseToken) return;
+  const token = lease.leaseToken;
   try {
     const res = await fetch(`${API_BASE}/api/leases/${leaseId}/status`, {
-      headers: { Authorization: `Bearer ${lease.leaseToken}` },
+      headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     });
+    if (leases.get(leaseId) !== lease || lease.leaseToken !== token) return;
     if (res.status === 401 || res.status === 403) {
       markLeaseEnded(leaseId);
       return;
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const status = await res.json();
+    if (leases.get(leaseId) !== lease || lease.leaseToken !== token) return;
+    if (status.status !== 'ACTIVE') {
+      markLeaseEnded(leaseId, status);
+      return;
+    }
     lease.accountCode = status.accountCode ?? lease.accountCode ?? null;
     lease.status = status;
     await persist();
     const config = await thresholdConfig();
+    if (leases.get(leaseId) !== lease || lease.leaseToken !== token) return;
     for (const tabId of tabsForLease(leaseId)) {
       sendToTab(tabId, { type: 'LEASE_STATUS', leaseId, status, config });
     }
   } catch (error) {
+    if (leases.get(leaseId) !== lease || lease.leaseToken !== token) return;
     const message = error && error.message ? error.message : String(error);
     for (const tabId of tabsForLease(leaseId)) sendToTab(tabId, { type: 'LEASE_SERVICE_ERROR', leaseId, error: message });
   }
 }
 
-function markLeaseEnded(leaseId) {
-  for (const tabId of tabsForLease(leaseId)) sendToTab(tabId, { type: 'LEASE_RELEASED', leaseId, status: { status: 'RELEASED' } });
+function markLeaseEnded(leaseId, status = { status: 'RELEASED' }) {
+  for (const tabId of tabsForLease(leaseId)) sendToTab(tabId, { type: 'LEASE_RELEASED', leaseId, status });
   for (const [tabId, binding] of [...tabLease]) if (binding.leaseId === leaseId) tabLease.delete(tabId);
+  for (const [tabId, binding] of [...pendingTabLease]) if (binding.leaseId === leaseId) pendingTabLease.delete(tabId);
   leases.delete(leaseId);
+  const activity = activityState.get(leaseId);
+  if (activity?.timer) clearTimeout(activity.timer);
   activityState.delete(leaseId);
   void persist();
   console.log('[scienceing-extension] lease ended', { leaseId });
 }
 
-function pollAllLeases() {
+async function pollAllLeases() {
+  await stateReady;
   for (const leaseId of [...leases.keys()]) void pollLease(leaseId);
 }
 
@@ -273,15 +330,23 @@ async function activityThrottleMs() {
 }
 
 async function postActivity(lease) {
+  if (leases.get(lease.leaseId) !== lease) return;
+  const token = lease.leaseToken;
   try {
     const res = await fetch(`${API_BASE}/api/leases/${lease.leaseId}/activity`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${lease.leaseToken}` },
-      body: JSON.stringify({ leaseToken: lease.leaseToken, event: 'activity' }),
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ leaseToken: token, event: 'activity' }),
       cache: 'no-store',
     });
+    if (leases.get(lease.leaseId) !== lease || lease.leaseToken !== token) return;
+    if (res.status === 401 || res.status === 403) {
+      markLeaseEnded(lease.leaseId);
+      return;
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json().catch(() => ({}));
+    if (leases.get(lease.leaseId) !== lease || lease.leaseToken !== token) return;
     if (data.result === 'LEASE_EXPIRED') {
       markLeaseEnded(lease.leaseId);
     } else if (data.expiresAt) {
@@ -301,6 +366,7 @@ async function handleActivity(leaseId) {
   activityState.set(leaseId, state);
 
   const throttleMs = await activityThrottleMs();
+  if (leases.get(leaseId) !== lease) return { ok: false, error: 'Lease 已失效' };
   const elapsed = now - state.lastSentAt;
   if (elapsed >= throttleMs && !state.timer) {
     state.lastSentAt = now;
@@ -370,6 +436,7 @@ async function handleOpenDashboard(message) {
 // ---------------------------------------------------------------------------
 
 async function handleMessage(message, sender) {
+  await stateReady;
   switch (message?.type) {
     case 'EXTENSION_INFO':
       return handleExtensionInfo();
@@ -379,6 +446,10 @@ async function handleMessage(message, sender) {
       return handleBindAndOpen(message);
     case 'GET_TAB_LEASE': {
       const tabId = sender?.tab?.id;
+      const url = sender?.url ?? sender?.tab?.url;
+      if (tabId == null || !isScienceingUrl(url)) return { bound: false };
+      updateTabBinding(tabId, url);
+      await persist();
       const binding = tabId != null ? tabLease.get(tabId) : undefined;
       if (!binding) return { bound: false };
       const lease = leases.get(binding.leaseId);
@@ -386,13 +457,21 @@ async function handleMessage(message, sender) {
     }
     case 'GET_LEASE_STATUS': {
       const leaseId = message.leaseId;
+      if (!isScienceingUrl(sender?.url ?? sender?.tab?.url) || tabLease.get(sender?.tab?.id)?.leaseId !== leaseId) {
+        return { ok: false, error: '当前页面未绑定该 Lease' };
+      }
       const lease = leases.get(leaseId);
       if (!lease) return { ok: false, error: '未知 Lease' };
       void pollLease(leaseId);
       return { ok: true, leaseId, status: lease.status ?? null };
     }
-    case 'REPORT_ACTIVITY':
+    case 'REPORT_ACTIVITY': {
+      const binding = tabLease.get(sender?.tab?.id);
+      if (!isScienceingUrl(sender?.url ?? sender?.tab?.url) || binding?.leaseId !== message.leaseId) {
+        return { ok: false, error: '当前页面未绑定该 Lease' };
+      }
       return handleActivity(message.leaseId);
+    }
     case 'OPEN_DASHBOARD':
       return handleOpenDashboard(message);
     default:
@@ -414,6 +493,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // 启动
 // ---------------------------------------------------------------------------
 
-void loadState(); // 异步恢复映射，不阻塞 SW 启动（MV3 顶层 await 会导致 SW 注册失败）
 ensurePolling();
+void pollAllLeases();
 console.log('[scienceing-extension] service worker ready, version', chrome.runtime.getManifest().version);

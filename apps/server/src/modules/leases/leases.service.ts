@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -51,15 +52,20 @@ export class LeasesService {
 
   /**
    * 原子领取（PRD §12 / §13 / R1 / R2）：
-   *   已存在 ACTIVE lease → 返回既有 lease（轮换 token）；
-   *   否则 BEGIN IMMEDIATE → 选 AVAILABLE → UPDATE IN_USE（条件更新）→ INSERT lease → COMMIT。
+   *   BEGIN IMMEDIATE → 检查既有租约/目标账号 → UPDATE IN_USE → INSERT lease → COMMIT。
    * 只有事务成功才返回 leaseToken + 账号 + 明文密码（R10）。
    */
-  claim(userId: number, extensionVersion?: string): { leaseToken: string; lease: LeaseView; account: AccountCredentialsView } {
+  claim(userId: number, extensionVersion?: string, accountId?: number): { leaseToken: string; lease: LeaseView; account: AccountCredentialsView } {
     const db = this.dbService.db;
 
+    if (accountId !== undefined && (!Number.isSafeInteger(accountId) || accountId <= 0)) {
+      throw new BadRequestException('accountId 必须为正整数');
+    }
+
     // R3/R4：插件未装 / 版本过旧 → 禁止领取（PRD §57，先于 R2 判断，PRD §12.1）
-    const minimumVersion = this.getMinimumExtensionVersion();
+    const configuredMinimum = this.getMinimumExtensionVersion();
+    const minimumVersion = accountId !== undefined && !isVersionAtLeast(configuredMinimum, '1.4.0')
+      ? '1.4.0' : configuredMinimum;
     if (!extensionVersion || !extensionVersion.trim()) {
       this.audit.record({ action: AUDIT_ACTION.CLAIM_ACCOUNT, result: AUDIT_RESULT.FAILED, userId, metadata: { reason: 'extension_missing' } });
       throw new ConflictException({ message: '未检测到科应账号助手，请先安装插件', code: 'EXTENSION_REQUIRED' });
@@ -72,24 +78,40 @@ export class LeasesService {
       });
     }
 
-    // R2：同一普通用户最多一个 ACTIVE lease
-    const existing = db
-      .prepare('SELECT * FROM leases WHERE user_id = ? AND status = ?')
-      .get(userId, LEASE_STATUS.ACTIVE) as unknown as LeaseRow | undefined;
-    if (existing) {
-      const token = this.rotateToken(existing.id);
-      return this.buildClaimResponse(existing.id, token);
-    }
-
     db.exec('BEGIN IMMEDIATE');
     try {
+      const existing = db
+        .prepare('SELECT * FROM leases WHERE user_id = ? AND status = ?')
+        .get(userId, LEASE_STATUS.ACTIVE) as unknown as LeaseRow | undefined;
+      if (existing) {
+        if (accountId !== undefined && existing.account_id !== accountId) {
+          throw new ConflictException({ code: 'ACTIVE_LEASE_CONFLICT', message: '您已持有其他账号，请先归还后再领取指定账号' });
+        }
+        const token = this.rotateToken(existing.id);
+        db.exec('COMMIT');
+        return this.buildClaimResponse(existing.id, token);
+      }
+
+      let target: AccountRow | undefined;
+      if (accountId !== undefined) {
+        target = db.prepare('SELECT * FROM scienceing_accounts WHERE id = ?').get(accountId) as unknown as AccountRow | undefined;
+        if (!target) throw new NotFoundException('指定账号不存在');
+        if (!target.enabled || target.status !== ACCOUNT_STATUS.AVAILABLE) {
+          const reason = !target.enabled ? '已停用' : target.status === ACCOUNT_STATUS.IN_USE
+            ? '正在使用中' : target.status === ACCOUNT_STATUS.RECYCLING ? '正在回收中' : '状态异常';
+          throw new ConflictException({ code: 'TARGET_ACCOUNT_UNAVAILABLE', message: `指定账号${reason}，请刷新状态后重试` });
+        }
+        if (!isPasswordProvisioned(target.id, target.current_password_ciphertext)) {
+          throw new ConflictException({ code: 'ACCOUNT_NOT_PROVISIONED', message: '指定账号尚未配置密码，请联系管理员重置密码' });
+        }
+      }
       // 占位密码（seed / CSV 导入）的账号不可发放：密文未对应科应平台上的真实口令，
       // 下发后扩展登录必然失败（此前直接 LIMIT 1 会把这类账号发给用户，导致「一用就废」）。
       // 池内逐个解密挑选第一个真实配置的可用账号；账号量小（默认 10 级），开销可忽略。
-      const candidates = db
+      const candidates = target ? [target] : db
         .prepare('SELECT * FROM scienceing_accounts WHERE status = ? AND enabled = 1 ORDER BY id')
         .all(ACCOUNT_STATUS.AVAILABLE) as unknown as AccountRow[];
-      const account = candidates.find((c) => isPasswordProvisioned(c.id, c.current_password_ciphertext));
+      const account = target ?? candidates.find((c) => isPasswordProvisioned(c.id, c.current_password_ciphertext));
       if (!account) {
         db.exec('ROLLBACK');
         this.audit.record({

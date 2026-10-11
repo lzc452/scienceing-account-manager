@@ -21,7 +21,7 @@ export class LeasesController {
   create(@Body() dto: CreateLeaseDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
     const identity = this.extensionProofs.requireIdentity(req.headers);
     const extensionVersion = this.extensionProofs.consume(user.id, dto.extensionProof, identity);
-    return this.leasesService.claim(user.id, extensionVersion);
+    return this.leasesService.claim(user.id, extensionVersion, dto.accountId);
   }
 
   @Get('current')

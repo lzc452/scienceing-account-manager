@@ -18,6 +18,8 @@
   let leaseId = null;
   let bound = false;
   let lastLocalActivityAt = 0;
+  let activityListenersAttached = false;
+  let receivedLeaseState = false;
   let config = { warningSeconds: 7200, criticalWarningSeconds: 3600, inactivityTimeoutSeconds: 86400 };
 
   // -------------------------------------------------------------------------
@@ -43,6 +45,8 @@
   }
 
   function attachActivityListeners() {
+    if (activityListenersAttached) return;
+    activityListenersAttached = true;
     for (const type of ACTIVITY_EVENTS) {
       window.addEventListener(type, onActivity, { passive: true, capture: true });
     }
@@ -54,15 +58,29 @@
 
   chrome.runtime.onMessage.addListener((message) => {
     if (!message) return;
-    if (message.type === 'LEASE_STATUS') {
+    if (message.type === 'LEASE_BOUND') {
+      receivedLeaseState = true;
       leaseId = message.leaseId;
       bound = true;
+      attachActivityListeners();
+      void chrome.runtime.sendMessage({ type: 'GET_LEASE_STATUS', leaseId }).catch(() => {});
+    } else if (message.type === 'LEASE_STATUS') {
+      receivedLeaseState = true;
+      leaseId = message.leaseId;
+      bound = message.status?.status === 'ACTIVE';
+      if (bound) attachActivityListeners();
       config = message.config ?? config;
       globalThis.__scienceingPanel?.render({ status: message.status, config, serviceError: false });
     } else if (message.type === 'LEASE_RELEASED') {
+      receivedLeaseState = true;
       leaseId = message.leaseId;
-      bound = true;
+      bound = false;
       globalThis.__scienceingPanel?.render({ status: message.status ?? { status: 'RELEASED' }, config, serviceError: false });
+    } else if (message.type === 'LEASE_UNBOUND') {
+      receivedLeaseState = true;
+      bound = false;
+      leaseId = null;
+      globalThis.__scienceingPanel?.render({ status: null, config, serviceError: false });
     } else if (message.type === 'LEASE_SERVICE_ERROR') {
       globalThis.__scienceingPanel?.render({ status: null, config, serviceError: true });
     }
@@ -75,18 +93,19 @@
   async function init() {
     try {
       const info = await chrome.runtime.sendMessage({ type: 'GET_TAB_LEASE' });
+      if (receivedLeaseState) return;
       if (info && info.bound) {
         leaseId = info.leaseId;
         bound = true;
         attachActivityListeners();
         // 触发一次状态拉取，worker 会推送 LEASE_STATUS 回来驱动首帧
         void chrome.runtime.sendMessage({ type: 'GET_LEASE_STATUS', leaseId }).catch(() => {});
-      } else {
+      } else if (!bound) {
         globalThis.__scienceingPanel?.render({ status: null, config, serviceError: false });
       }
     } catch {
       // worker 不可达：按未绑定处理，不挂 Activity 监听
-      globalThis.__scienceingPanel?.render({ status: null, config, serviceError: false });
+      if (!receivedLeaseState) globalThis.__scienceingPanel?.render({ status: null, config, serviceError: false });
     }
   }
 

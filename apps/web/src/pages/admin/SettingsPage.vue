@@ -29,7 +29,7 @@ const leaseRules = ref({
   critical_warning_hours: '1',
 })
 
-const extensionConfig = ref({ minimumVersion: '1.0.0', latestVersion: '1.3.0' })
+const extensionConfig = ref({ minimumVersion: '1.0.0', latestVersion: '1.4.0' })
 const health = ref({ lastCheckedAt: null, items: [] })
 
 const healthOk = computed(() => health.value.items.length > 0 && health.value.items.every((i) => i.ok))
