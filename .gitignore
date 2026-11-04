@@ -101,3 +101,8 @@ deploy-cloud/extension-key.pem
 dist-tmp-*/
 .release-tmp/
 *.copying-*
+
+# CloudBase 本地容器验证用的数据卷与持久化验证状态（含测试库，勿入库）
+.local-data/
+.local-backup/
+.persist-state.json

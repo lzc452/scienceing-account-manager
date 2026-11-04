@@ -1,0 +1,62 @@
+# 构建上下文裁剪：镜像里只应有源码、清单与前端 public 资源。
+# 关键原则：依赖、构建产物、数据库、密钥、日志一律不进上下文。
+
+# 依赖与构建产物（镜像内重新安装/编译）
+node_modules
+**/node_modules
+dist
+**/dist
+apps/web/dist-build
+
+# 数据与运行时状态：绝不能进镜像
+data
+*.db
+*.db-wal
+*.db-shm
+backups
+**/backups
+logs
+**/*.log
+run
+**/.worker-logs
+playwright/.auth
+
+# 密钥与本地配置
+.env
+.env.*
+**/.env
+**/.env.*
+!deploy-cloudbase/.env.example
+**/*.pem
+**/*.key
+**/*.p12
+deploy-cloud/extension-key.pem
+
+# 与运行镜像无关的开发/部署资产
+.git
+.gitignore
+.eslintcache
+docs
+screenshots
+deploy-lan
+deploy-cloud
+deployment
+
+# 扩展下载包：public/ 下这份是开发机打的本机地址包（localhost:5173），
+# 打进镜像会误导用户。云托管域名只有部署后才知道，包必须在拿到域名后重打，
+# 由 entrypoint 从 /data/extension 覆盖进静态目录。
+apps/web/public/downloads
+playwright/mock
+playwright/pw-*.log
+scripts/test
+apps/**/test
+apps/server/src/e2e
+**/*.test.ts
+**/*.test.mjs
+**/*.test.cjs
+temp
+tmp
+check.log
+login.log
+
+# 保留：apps/web/public（构建输入，含 downloads 扩展包）、packages/shared/src、pnpm-lock.yaml

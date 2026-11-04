@@ -1,0 +1,15 @@
+# 行尾统一：这些文件在容器内被直接执行或解析，CRLF 会导致
+# "/usr/local/bin/entrypoint.sh: bad interpreter" 这类只在 Linux 才暴露的故障。
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+.dockerignore   text eol=lf
+*.mjs           text eol=lf
+*.conf          text eol=lf
+*.yml           text eol=lf
+
+# 依赖与产物按二进制处理，避免被文本转换污染
+*.png           binary
+*.zip           binary
+*.woff          binary
+*.woff2         binary
+*.db            binary

@@ -1,0 +1,18 @@
+{
+  "envId": "请替换为你的 CloudBase 环境 ID",
+  "framework": {
+    "name": "scienceing",
+    "plugins": {
+      "run": {
+        "use": "@cloudbase/framework-plugin-run",
+        "inputs": {
+          "serviceName": "scienceing",
+          "servicePath": "/",
+          "localPath": "./",
+          "dockerfile": "./Dockerfile",
+          "buildDir": "."
+        }
+      }
+    }
+  }
+}

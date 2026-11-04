@@ -6,6 +6,7 @@ import { AppModule } from './app.module';
 import { requestContextMiddleware } from './lib/request-context';
 import { createRateLimiter } from './lib/rate-limit';
 import { deploymentVerificationMiddleware } from './lib/deploy-verification';
+import { resolveWebDist, webStaticMiddleware } from './lib/web-static';
 
 /** 爆破敏感端点（含全局前缀 /api）。 */
 const THROTTLED_PATHS = new Set(['/api/auth/login', '/api/admin/verify-password']);
@@ -87,6 +88,14 @@ async function bootstrap(): Promise<void> {
 
   app.use(requestContextMiddleware);
   app.enableCors({ origin: corsOrigins(), credentials: true });
+
+  // 单容器形态（CloudBase 云托管）：同一进程托管前端产物，/api 之外的 GET 走静态。
+  // 未设置 WEB_DIST_DIR 时不注册任何中间件，开发与 nginx 部署行为完全不变。
+  const webDist = resolveWebDist();
+  if (webDist) {
+    app.use(webStaticMiddleware(webDist));
+    console.log(`[server] 前端静态托管已启用：${webDist}`);
+  }
   const port = Number(process.env.PORT ?? 3000);
   await app.listen(port);
   console.log(`[server] scienceing-server listening on http://localhost:${port}/api`);
