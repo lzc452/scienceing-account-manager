@@ -194,7 +194,7 @@ node deploy-cloudbase/scripts/make-source-zip.mjs
 | 已内置的默认值 | 值 | 说明 |
 |---|---|---|
 | `NPM_REGISTRY` | `https://registry.npmmirror.com` | pnpm/npm 安装依赖 |
-| `APT_MIRROR` | `https://mirrors.aliyun.com` | Chromium 系统依赖（Debian 官方源实测 10 分钟只下 12 个包，111 个包必然超时） |
+| `APT_MIRROR` | `http://mirrors.aliyun.com` | Chromium 系统依赖（Debian 官方源实测 10 分钟只下 12 个包，111 个包必然超时；必须用 **http**，slim 镜像没有 ca-certificates，https 源会全部证书校验失败） |
 | `PLAYWRIGHT_DOWNLOAD_HOST` | `https://cdn.npmmirror.com/binaries/playwright` | Chromium 二进制 |
 
 仍需人工干预的情况（改 `Dockerfile` 顶部 `ARG` 默认值后重新打包上传）：
@@ -333,27 +333,28 @@ SQLite 单文件 + 结构变更，不允许"新旧两版同时写"：
 
 ## 10. 已验证 / 未验证（诚实边界）
 
-**已在本地用与容器完全相同的代码路径验证（Windows Node 22.22.2，journal=delete，独立数据目录）：**
+**已在真实容器内验证（2026-11-04，Rancher Desktop / Docker + Node 24，`journal=delete`，Windows 目录挂载到 `/data`）：**
 
 | 项 | 结果 |
 |---|---|
-| `tsc` 编译（server / worker）与 `vite build` | 通过 |
-| 首次初始化：`migrate --initialize` + `seed`（admin + 10 账号 + 设置 + 手册） | 通过 |
-| `db:verify`（结构/外键/主密钥解密） | 通过；**错误主密钥时失败退出**（exit=1） |
-| 重复迁移 | `已应用 0 个迁移`（幂等，不覆盖数据） |
-| `predeploy`/`startup-catchup` 备份 | 生成快照成功，未覆盖已有文件 |
-| 生产模式启动（`NODE_ENV=production` + `WEB_DIST_DIR`） | 启动成功，前端静态托管启用 |
-| 冒烟 8 项（health/首页/SPA/下载 404/API 404/安全头/扩展配置/登录会话） | 8/8 通过，`journalMode=delete` |
-| 重启后持久化 | 同一 cookie 会话仍有效（`verify-persistence` PASS） |
-| 后端单测（crypto/config/migrate/backup/upgrade/seed） | 35/35 通过 |
-| 后端不变量 + 安全头检查 | 12/12 通过 |
+| `docker build`（多阶段 + Chromium） | **成功**，耗时 11m19s；镜像内容 557 MB（本地磁盘占用 2.07 GB） |
+| 容器启动与健康检查 | `Up (healthy)`；Dockerfile 里的 `HEALTHCHECK` 直接命中 `/api/health` |
+| 入口脚本首次初始化 | 建库 → 7 个迁移 → seed（admin + 10 账号 + 设置 + 手册）→ verify → 启动，全链路一次通过 |
+| 冒烟 8 项（health/首页/SPA/下载 404/API 404/安全头/扩展配置/登录会话） | **8/8 通过**，`journalMode=delete` |
+| 重启后持久化 | `verify-persistence` **PASS**：重启后同一 cookie 会话仍有效 |
+| SIGTERM 处理 | 入口脚本正确转发信号，应用优雅退出后重启进入「库已存在」分支 |
+| 重启时的迁移保护 | 自动生成 `*.predeploy.db` 快照 → `已应用 0 个迁移` → verify 通过（幂等，不覆盖数据） |
+| 第二个实例挂同一数据卷 | 正确跳过初始化（未设 `ALLOW_DB_INIT` 时拒绝建库）、0 迁移、能读到前一个实例写入的会话 → HTTP 200 |
+| 空闲资源占用 | **CPU 0%、内存 44 MiB**（Node + SQLite；Chromium 仅改密时以子进程短时存在） |
+| 容器内 Chromium 启动 | `chromium.launch({channel:'chromium'})` **成功**（151.0.7922.34），改密链路的前置条件成立 |
+| `tsc` 编译（server / worker）、`vite build`、后端单测 35/35、不变量+安全头 12/12 | 通过 |
 
 **未验证（上线前必须补做）：**
 
-1. **镜像构建与容器运行**：本机 Docker 无法启动（Rancher Desktop shim 拒绝访问），`docker build` / `docker run` 未实际执行。请在装有 Docker 的机器上按 6.3 跑通；
-2. **CFS 上的 SQLite 实测**：NFS 的锁语义、`delete` 模式下的并发写入、断网重连后的 `quick_check`，都必须在真实 CFS 上验证（本机是本地盘，不能代表）；
-3. **后台调度器在云托管上的 CPU 行为**：`TimeoutScheduler` 每 15s 回收超时租约、每日 02:00 备份。平台文档明确"响应返回后实例可能拿不到 CPU"，锁死单实例通常没问题，但需实测——设置一个很短的 `inactivity_timeout_hours`，观察租约是否按预期回收；若被限流，需要改为外部定时任务触发；
-4. **Chromium 在容器内的工作流**：Worker 从容器访问 `www.scienceing.com` 改密的完整链路；
+1. **CFS 上的 SQLite 实测**：本次用的是 Windows 目录挂载（9p/virtiofs），能跑通 `delete` 模式，但**不等于 NFS**。CFS 的锁语义、并发写入、断网重连后的 `quick_check` 仍需在真实 CFS 上验证；
+2. **后台调度器在云托管上的 CPU 行为**：`TimeoutScheduler` 每 15s 回收超时租约、每日 02:00 备份。平台文档明确"响应返回后实例可能拿不到 CPU"，锁死单实例通常没问题，但需实测——设置一个很短的 `inactivity_timeout_hours`，观察租约是否按预期回收；若被限流，需要改为外部定时任务触发；
+3. **Chromium 的完整改密流程**：二进制能启动，但"登录科应后台 → 重置密码"需要真实 `SCIENCING_ADMIN_*` 凭据才能验证；
+4. **平台构建**：本文的镜像是在本机 Docker 构建的；云托管构建机（国内网络）能否拉取 `node:22-bookworm-slim` 与 Chromium 二进制仍需一次实测（依赖源已默认国内，前三类失败已预置规避）；
 5. **扩展下载包**：现有 `deploy-lan` 打包器只支持 `http://<LAN IP>`，云托管是 HTTPS 域名，包内的 `DASHBOARD_ORIGINS/API_BASE` 与 `manifest` 白名单需要按新域名重打包（可放到 `/data/extension`，入口脚本会自动覆盖静态目录）。**未重打包前，扩展无法指向新环境**——这是功能缺口，不是部署问题。
    另外 `apps/web/public/downloads/` 已被 `.dockerignore` 排除（那是开发机打的 `localhost:5173` 包），所以镜像里 `/downloads` 初始为空、`/api/extension/config` 返回 `available:false`，这是**预期行为**，不是打包失败。
 
@@ -367,7 +368,7 @@ SQLite 单文件 + 结构变更，不允许"新旧两版同时写"：
 | SQLite + NFS（CFS） | 写放大、锁延迟、极端情况下 I/O 错误 | 单实例 + delete journal + FULL sync；每日备份 + 发布前快照；长期建议换 PostgreSQL（方案 C） |
 | 单实例 | 无水平扩容，重启有短暂不可用 | 测试阶段可接受；发布走"缩容 0 → 部署 → 扩容 1" |
 | 后台定时任务 | 平台空闲限流可能延迟回收/备份 | 实测；必要时加外部定时触发 |
-| 镜像含 Chromium | 镜像 ~1GB，首次拉取/冷启动慢 | `min=1` 保持常驻；健康检查初始延迟 ≥45s |
+| 镜像含 Chromium | 镜像内容 557 MB（实测），首次拉取/冷启动慢 | `min=1` 保持常驻；健康检查初始延迟 ≥45s；确实不需要改密功能时用 `INSTALL_CHROMIUM=false` 出轻量版 |
 | 运行期 root | 容器内权限较大 | 无构建工具、`/app` 不含密钥；CFS 权限允许时开 `RUN_AS_NONROOT=1` |
 
 ---

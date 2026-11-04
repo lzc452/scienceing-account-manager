@@ -53,8 +53,9 @@ ARG NPM_REGISTRY=https://registry.npmmirror.com
 ARG APP_VERSION=0.1.0
 ARG PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright
 # Debian 官方源在国内极慢（实测 10 分钟只下到 12 个包，111 个包必然超时），换成国内镜像。
+# 必须用 http：node:*-slim 里没有 ca-certificates，https 源会因证书校验失败全部 Err（No system certificates）。
 # 海外构建可传 --build-arg APT_MIRROR= 关闭替换，恢复 deb.debian.org。
-ARG APT_MIRROR=https://mirrors.aliyun.com
+ARG APT_MIRROR=http://mirrors.aliyun.com
 # 首次验证镜像体积/构建时长时可以先设 false 跳过 Chromium（代价：管理员「重置科应密码」不可用）
 ARG INSTALL_CHROMIUM=true
 
