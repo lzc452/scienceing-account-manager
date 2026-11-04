@@ -189,14 +189,21 @@ node deploy-cloudbase/scripts/make-source-zip.mjs
 控制台：**云托管 → 新建服务（或「发布新版本」）→ 本地代码 → 上传该 zip → 构建目录留空 → 监听端口 8080**。
 镜像由平台在云端构建，**本机不需要装 Docker**。
 
-构建阶段的典型失败与处理（改 `Dockerfile` 顶部的 `ARG` 默认值后重新打包上传即可）：
+构建阶段的典型失败与处理。**注意：云托管控制台构建无法传 `--build-arg`**，所以依赖源已经写成「国内可达」的默认值，正常情况下零参数即可构建：
+
+| 已内置的默认值 | 值 | 说明 |
+|---|---|---|
+| `NPM_REGISTRY` | `https://registry.npmmirror.com` | pnpm/npm 安装依赖 |
+| `APT_MIRROR` | `https://mirrors.aliyun.com` | Chromium 系统依赖（Debian 官方源实测 10 分钟只下 12 个包，111 个包必然超时） |
+| `PLAYWRIGHT_DOWNLOAD_HOST` | `https://cdn.npmmirror.com/binaries/playwright` | Chromium 二进制 |
+
+仍需人工干预的情况（改 `Dockerfile` 顶部 `ARG` 默认值后重新打包上传）：
 
 | 现象 | 处理 |
 |---|---|
-| `FROM` 拉取超时（docker.io 不可达） | 把 `ARG NODE_IMAGE` 默认值改为可达镜像源，如 `docker.m.daocloud.io/library/node:22-bookworm-slim` |
-| `pnpm install` 超时 | 把 `ARG NPM_REGISTRY` 默认值改为 `https://registry.npmmirror.com` |
-| Chromium 下载慢 | 把 `ARG PLAYWRIGHT_DOWNLOAD_HOST` 默认值改为 `https://cdn.npmmirror.com/binaries/playwright` |
-| 只想先跑通业务、暂时不要改密功能 | 构建时把 `ARG INSTALL_CHROMIUM` 改成 `false`（镜像小一半，代价是「重置科应密码」不可用） |
+| `FROM` 拉不到基础镜像（docker.io 超时） | 把 `ARG NODE_IMAGE` 改为 `docker.m.daocloud.io/library/node:22-bookworm-slim` 等可达地址 |
+| 容器内 DNS 偶发 `EAI_AGAIN`（getaddrinfo 失败） | 直接重试构建即可（RD/构建机 DNS 抖动，已完成的层会走缓存） |
+| 只想先跑通业务、暂时不要改密功能 | 把 `ARG INSTALL_CHROMIUM` 改成 `false`（镜像小一半，代价是「重置科应密码」不可用） |
 
 ### 6.4 本地构建与自测（可选，需要本机 Docker）
 
