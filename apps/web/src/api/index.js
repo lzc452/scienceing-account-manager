@@ -14,7 +14,11 @@ import { mockApi } from './mock'
  * 纯 UI 开发用 mock：`VITE_USE_MOCK=true`。
  */
 export const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
-const API_BASE = '/api'
+// 子路径部署（如挂在 /scienceing/）时由 vite 的 base 注入 BASE_URL，末尾自带斜杠：
+//   base='/'          → '/api'
+//   base='/scienceing/' → '/scienceing/api'
+// 不要写成固定的 '/api'，否则子路径部署时请求会打到站点根路径、脱离应用前缀。
+const API_BASE = `${import.meta.env.BASE_URL}api`
 
 /**
  * 登录态。
@@ -102,7 +106,7 @@ function applyExtensionState(detail) {
  * 固定文件名保证前端无需知道版本号即可给出稳定入口；
  * 真实版本/更新时间由后端 GET /extension/config 的 package 字段补充（见 loadExtensionPackage）。
  */
-export const EXTENSION_DOWNLOAD_PATH = '/downloads/scienceing-extension.zip'
+export const EXTENSION_DOWNLOAD_PATH = `${import.meta.env.BASE_URL}downloads/scienceing-extension.zip`
 
 export const extensionPackage = reactive({
   available: false,

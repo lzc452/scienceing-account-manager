@@ -15,10 +15,14 @@ ARG NODE_IMAGE=node:22-bookworm-slim
 FROM ${NODE_IMAGE} AS build
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 ARG APP_VERSION=0.1.0
+# 前端部署子路径（如 /scienceing/）。末尾必须带斜杠；根路径部署保持 "/"。
+# 由 vite.config.mjs 的 base 读取，进而决定 index.html 资源引用与 router/API 基址。
+ARG WEB_BASE_PATH=/
 
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
-    CI=1
+    CI=1 \
+    VITE_BASE_PATH=${WEB_BASE_PATH}
 WORKDIR /app
 
 # 直接装固定版本 pnpm：corepack 需要联网解析 packageManager，且对 pnpm 11 支持取决于 corepack 版本，

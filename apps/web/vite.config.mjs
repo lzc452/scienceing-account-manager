@@ -14,6 +14,10 @@ const backendPort = Number(process.env.PORT) || 3000
 // 注：使用 .mjs 配置，避免 Vite 用 esbuild 打包配置文件的子进程 spawn。
 export default defineConfig({
   plugins: [vue(), tailwindcss()],
+  // 部署子路径（如 /scienceing/）时由构建期环境变量注入，Dockerfile 用 WEB_BASE_PATH 传入。
+  // 本地开发不设该变量 → 回落到 '/'，开发行为与之前完全一致。
+  // 末尾必须带斜杠，否则 Vite 生成的资源路径会少一级。
+  base: process.env.VITE_BASE_PATH || '/',
   // 沙箱限制：禁用 esbuild 变换（其 spawn 子进程被 EPERM 拦截）。纯 JS 源码
   // 不依赖 esbuild 的 TS/JSX 转换，define 替换与 CSS 压缩已另行走无 spawn 路径。
   esbuild: false,

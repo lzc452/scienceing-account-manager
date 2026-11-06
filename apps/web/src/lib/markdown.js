@@ -13,6 +13,27 @@ import DOMPurify from 'dompurify'
 const PLACEHOLDER_SRC = /^placeholder(:.*)?$/i
 export const IMAGE_PLACEHOLDER_SRC = 'placeholder'
 
+/**
+ * 站内绝对路径对齐到当前部署前缀。
+ *
+ * 背景：手册正文里的插图写的是 `/manual/xx.png`（站点根绝对路径）。根路径部署时没问题，
+ * 但应用挂到子路径（如 /scienceing/）后，浏览器会真的去站点根请求 `/manual/...`，
+ * nginx 上没有对应 location → 全部 404。
+ *
+ * 因此渲染时把以 `/` 开头的站内路径补上 BASE_URL：
+ *   base='/scienceing/' + '/manual/01.png' → '/scienceing/manual/01.png'
+ * 已带前缀或已是根路径部署的原样返回，避免重复拼接。
+ */
+const BASE_URL = import.meta.env.BASE_URL || '/'
+
+function withBasePath(path) {
+  if (!path || !path.startsWith('/') || path.startsWith('//')) return path
+  const base = BASE_URL.endsWith('/') ? BASE_URL.slice(0, -1) : BASE_URL
+  if (!base) return path // 根路径部署，无需改写
+  if (path === base || path.startsWith(`${base}/`)) return path // 已带前缀
+  return base + path
+}
+
 const md = new MarkdownIt({
   html: false, // 禁止正文内联 HTML，杜绝脚本注入
   xhtmlOut: false,
@@ -53,6 +74,10 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   if (/^https?:\/\//i.test(href)) {
     tokens[idx].attrSet('target', '_blank')
     tokens[idx].attrSet('rel', 'noopener noreferrer')
+  } else {
+    // 站内绝对路径（如 [下载](/downloads/x.zip)）同样要补部署前缀；锚点 # 不动
+    const site = withBasePath(href)
+    if (site !== href) tokens[idx].attrSet('href', site)
   }
   return self.renderToken(tokens, idx, options)
 }
@@ -64,10 +89,10 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
  */
 md.renderer.rules.image = (tokens, idx) => {
   const token = tokens[idx]
-  const src = (token.attrGet('src') || '').trim()
+  const rawSrc = (token.attrGet('src') || '').trim()
   const alt = token.content || ''
 
-  if (!src || PLACEHOLDER_SRC.test(src)) {
+  if (!rawSrc || PLACEHOLDER_SRC.test(rawSrc)) {
     const text = md.utils.escapeHtml(alt || '此处待补充图片')
     return [
       '<div class="md-figure-placeholder" role="note">',
@@ -77,11 +102,14 @@ md.renderer.rules.image = (tokens, idx) => {
     ].join('')
   }
 
-  if (!/^(https?:\/\/|\/|data:image\/)/i.test(src)) {
+  if (!/^(https?:\/\/|\/|data:image\/)/i.test(rawSrc)) {
     // 非 http(s) / 站内路径 / data 图片（含 javascript: 等）一律按占位处理，避免注入
     const text = md.utils.escapeHtml(alt || '图片地址不被允许')
     return `<div class="md-figure-placeholder" role="note"><span class="md-figure-placeholder__badge">图片地址无效</span><span class="md-figure-placeholder__text">${text}</span></div>`
   }
+
+  // 站内路径补齐部署前缀（子路径部署下 /manual/x.png 会 404）
+  const src = withBasePath(rawSrc)
 
   const escapedAlt = md.utils.escapeHtml(alt)
   const img = `<img src="${md.utils.escapeHtml(src)}" alt="${escapedAlt}" loading="lazy" class="md-figure" />`

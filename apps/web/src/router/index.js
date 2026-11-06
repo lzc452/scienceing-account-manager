@@ -15,7 +15,8 @@ import { authState, isLoggedIn } from '@/api'
  * `/design` 为 Phase 0 组件总览（供设计走查）。
  */
 const router = createRouter({
-  history: createWebHistory(),
+  // 子路径部署时路由必须知道 base，否则 /scienceing/login 这类地址会匹配不到路由而白屏。
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/', name: 'home', component: HomePage },
     { path: '/login', name: 'login', component: LoginPage },
