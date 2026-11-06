@@ -25,13 +25,15 @@ export class UsersService {
   ) {}
 
   /**
-   * 用户列表（分页）。返回结构与 `/admin/leases`、`/admin/logs` 保持一致：
+   * 用户列表（分页 + 关键词过滤）。返回结构与 `/admin/leases`、`/admin/logs` 一致：
    * `{ items, total, page, pageSize }`。
    *
-   * 为什么要分页：账号池可达数百条，一次性全量返回会让前端渲染卡顿、
+   * 为什么要分页：账号池可达数百条（实测 450），一次性全量返回会让前端渲染卡顿、
    * 响应体过大，且表格无法定位。pageSize 上限 100，防止前端传超大值绕过。
+   *
+   * keyword 同时匹配用户名 / 姓名 / 部门；`%` `_` `\` 做转义，避免用户输入被当成通配符。
    */
-  list(query: { page?: number; pageSize?: number } = {}): {
+  list(query: { page?: number; pageSize?: number; keyword?: string } = {}): {
     items: AuthUser[];
     total: number;
     page: number;
@@ -39,13 +41,24 @@ export class UsersService {
   } {
     const page = Math.max(1, Math.trunc(query.page ?? 1));
     const pageSize = Math.min(100, Math.max(1, Math.trunc(query.pageSize ?? 20)));
+    const keyword = (query.keyword ?? '').trim();
 
-    const total = this.dbService.db.prepare('SELECT COUNT(*) AS c FROM users').get() as unknown as {
-      c: number;
-    };
+    let where = '';
+    const params: Array<string | number> = [];
+    if (keyword) {
+      // ESCAPE '\' 让用户输入的 % 和 _ 按字面量处理
+      const like = `%${keyword.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+      where = "WHERE username LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\' OR department LIKE ? ESCAPE '\\'";
+      params.push(like, like, like);
+    }
+
+    const total = this.dbService.db
+      .prepare(`SELECT COUNT(*) AS c FROM users ${where}`)
+      .get(...params) as unknown as { c: number };
+
     const rows = this.dbService.db
-      .prepare('SELECT * FROM users ORDER BY id LIMIT ? OFFSET ?')
-      .all(pageSize, (page - 1) * pageSize) as unknown as UserRow[];
+      .prepare(`SELECT * FROM users ${where} ORDER BY id LIMIT ? OFFSET ?`)
+      .all(...params, pageSize, (page - 1) * pageSize) as unknown as UserRow[];
 
     return { items: rows.map(toAuthUser), total: total.c, page, pageSize };
   }

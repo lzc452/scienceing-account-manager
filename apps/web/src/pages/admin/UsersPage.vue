@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import AdminLayout from '@/layouts/AdminLayout.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -51,6 +51,17 @@ const PAGE_SIZE = 20
 const total = ref(0)
 const page = ref(1)
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
+
+// ── 搜索（服务端过滤用户名/姓名/部门，300ms 防抖） ──
+const keyword = ref('')
+let searchTimer = null
+watch(keyword, () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    page.value = 1 // 换关键词必须回到第 1 页，否则可能落在空页
+    load()
+  }, 300)
+})
 
 const formOpen = ref(false)
 const formMode = ref('create')
@@ -193,7 +204,7 @@ async function load(opts = {}) {
   if (opts?.silent) pending.value = true
   else loading.value = true
   try {
-    const res = await getAdminUsers({ page: page.value, pageSize: PAGE_SIZE })
+    const res = await getAdminUsers({ page: page.value, pageSize: PAGE_SIZE, keyword: keyword.value })
     users.value = res.items || []
     total.value = res.total ?? 0
     error.value = ''
@@ -398,6 +409,17 @@ async function onToggleConfirm() {
         @change="onCsvFile"
       />
 
+      <!-- 搜索：服务端过滤（用户名 / 姓名 / 部门），300ms 防抖后回到第 1 页 -->
+      <div class="flex flex-wrap items-center gap-2">
+        <Input
+          v-model="keyword"
+          type="search"
+          placeholder="搜索用户名 / 姓名 / 部门"
+          class="w-full sm:w-72"
+        />
+        <span v-if="keyword.trim()" class="text-xs text-mid-gray">匹配 {{ total }} 条</span>
+      </div>
+
       <!-- 六列 + 三个操作按钮，舒适最小宽度 840px，溢出在卡片内部滚动 -->
       <Card class="overflow-hidden">
         <Table min-width="min-w-[840px]">
@@ -422,6 +444,13 @@ async function onToggleConfirm() {
                 <TableCell colspan="6" class="py-6 text-center text-mid-gray">
                   {{ error }}
                   <Button variant="outline" size="sm" class="ml-3" @click="load">重试</Button>
+                </TableCell>
+              </TableRow>
+            </template>
+            <template v-else-if="users.length === 0">
+              <TableRow>
+                <TableCell colspan="6" class="py-6 text-center text-mid-gray">
+                  {{ keyword.trim() ? '没有匹配的用户' : '暂无用户' }}
                 </TableCell>
               </TableRow>
             </template>

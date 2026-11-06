@@ -23,13 +23,14 @@ import type { UpdateUserDto } from './dto/update-user.dto';
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
-  /** 用户列表（分页）：GET /admin/users?page=1&pageSize=20 */
+  /** 用户列表（分页 + 关键词）：GET /admin/users?page=1&pageSize=20&keyword=张 */
   @Get()
   list(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('pageSize', new DefaultValuePipe(20), ParseIntPipe) pageSize: number,
+    @Query('keyword') keyword?: string,
   ) {
-    return this.usersService.list({ page, pageSize });
+    return this.usersService.list({ page, pageSize, keyword });
   }
 
   @Post()

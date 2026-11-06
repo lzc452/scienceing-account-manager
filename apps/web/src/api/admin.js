@@ -72,21 +72,25 @@ export function bulkCreateAccounts(accounts) {
 }
 
 /**
- * 用户列表（分页）：GET /admin/users?page=&pageSize=
+ * 用户列表（分页 + 关键词）：GET /admin/users?page=&pageSize=&keyword=
  * 返回 { items, total, page, pageSize }，与租约/日志列表保持一致。
  */
-export function getAdminUsers({ page = 1, pageSize = 20 } = {}) {
+export function getAdminUsers({ page = 1, pageSize = 20, keyword = '' } = {}) {
   if (USE_MOCK) {
-    return Promise.resolve(adminMockApi.listUsers()).then((items) => ({
-      items,
-      total: items.length,
-      page: 1,
-      pageSize: items.length,
-    }))
+    return Promise.resolve(adminMockApi.listUsers()).then((all) => {
+      const kw = keyword.trim().toLowerCase()
+      const items = kw
+        ? all.filter((u) =>
+            [u.username, u.displayName, u.department].some((v) => String(v || '').toLowerCase().includes(kw)),
+          )
+        : all
+      return { items, total: items.length, page: 1, pageSize: items.length }
+    })
   }
   const qs = new URLSearchParams()
   qs.set('page', String(page))
   qs.set('pageSize', String(pageSize))
+  if (keyword.trim()) qs.set('keyword', keyword.trim())
   return http('GET', `/admin/users?${qs.toString()}`)
 }
 
