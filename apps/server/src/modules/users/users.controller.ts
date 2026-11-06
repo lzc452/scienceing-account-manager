@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   DefaultValuePipe,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -45,6 +46,15 @@ export class UsersController {
     @CurrentUser() admin: AuthUser,
   ): Promise<{ created: number; failed: Array<{ username: string; reason: string }> }> {
     return this.usersService.createMany(dto.users ?? [], admin);
+  }
+
+  /**
+   * 删除用户：DELETE /admin/users/:id
+   * 仅允许删除无租用/审计记录的「干净用户」；有历史请改用停用。
+   */
+  @Delete(':id')
+  remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() admin: AuthUser) {
+    return this.usersService.deleteUser(id, admin);
   }
 
   @Patch(':id')

@@ -262,6 +262,14 @@ async function listUsers() {
   return cloneUsers()
 }
 
+async function deleteUser(id) {
+  await delay()
+  const idx = state.users.findIndex((u) => u.id === id)
+  if (idx === -1) throw httpError('用户不存在', 404)
+  state.users.splice(idx, 1)
+  return { id }
+}
+
 async function createUser(dto) {
   await delay()
   if (state.users.some((u) => u.username === dto.username)) {
@@ -648,6 +656,7 @@ export const adminMockApi = {
   bulkCreateAccounts,
   listUsers,
   createUser,
+  deleteUser,
   bulkCreateUsers,
   updateUser,
   verifyAdminPassword,

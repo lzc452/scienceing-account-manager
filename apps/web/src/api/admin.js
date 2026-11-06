@@ -98,6 +98,11 @@ export function createUser(dto) {
   return USE_MOCK ? adminMockApi.createUser(dto) : http('POST', '/admin/users', dto)
 }
 
+/** 删除用户（仅限无租用/审计记录的干净用户）：DELETE /admin/users/:id */
+export function deleteUser(userId) {
+  return USE_MOCK ? adminMockApi.deleteUser(userId) : http('DELETE', `/admin/users/${userId}`)
+}
+
 /** CSV 批量导入（前端解析、二次确认后整批提交）：POST /admin/users/bulk */
 export function bulkCreateUsers(users) {
   return USE_MOCK

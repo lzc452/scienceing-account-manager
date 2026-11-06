@@ -63,6 +63,76 @@ export class UsersService {
     return { items: rows.map(toAuthUser), total: total.c, page, pageSize };
   }
 
+  /**
+   * 删除用户（仅允许删除「干净用户」）。
+   *
+   * 约束按顺序校验，命中即拒绝：
+   *   1. 用户不存在 → 404
+   *   2. 删除自己 → 400（否则当前管理会话失去主体，无从恢复）
+   *   3. 删除系统最后一个管理员 → 400（防止系统再无管理入口）
+   *   4. 存在租约记录 → 409（用户是操作主体，物理删除会破坏审计链）
+   *   5. 存在审计记录 → 409（同上）
+   *
+   * 设计取舍：不做级联删除。`leases` / `audit_logs` 都是 `REFERENCES users(id)` 且无
+   * ON DELETE 子句，硬删要么违反外键、要么得先删历史记录——那等于销毁审计证据。
+   * 因此「有历史」一律提示改用停用（enabled=0），只允许清理「创建后从未使用」的用户，
+   * 这正好覆盖批量导入纠错的场景。
+   */
+  async deleteUser(id: number, admin: AuthUser): Promise<{ id: number }> {
+    const db = this.dbService.db;
+
+    const row = db.prepare('SELECT * FROM users WHERE id = ?').get(id) as unknown as UserRow | undefined;
+    if (!row) throw new NotFoundException('用户不存在');
+
+    if (row.id === admin.id) {
+      throw new BadRequestException('不能删除当前登录的管理员账号');
+    }
+    if (row.role === USER_ROLE.ADMIN) {
+      const admins = db.prepare('SELECT COUNT(*) AS c FROM users WHERE role = ?').get(USER_ROLE.ADMIN) as unknown as {
+        c: number;
+      };
+      if (admins.c <= 1) throw new BadRequestException('系统至少要保留一个管理员账号');
+    }
+    if (db.prepare('SELECT 1 FROM leases WHERE user_id = ? LIMIT 1').get(id)) {
+      throw new ConflictException({
+        code: 'USER_HAS_HISTORY',
+        message: '该用户已有租用记录，不能删除；请改为停用以保留审计链',
+      });
+    }
+    if (db.prepare('SELECT 1 FROM audit_logs WHERE user_id = ? LIMIT 1').get(id)) {
+      throw new ConflictException({
+        code: 'USER_HAS_HISTORY',
+        message: '该用户已有操作记录，不能删除；请改为停用以保留审计链',
+      });
+    }
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      // sessions.user_id 是 NOT NULL 外键，必须先清会话再删用户
+      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
+      db.prepare('DELETE FROM users WHERE id = ?').run(id);
+      db.exec('COMMIT');
+    } catch (err) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        /* 已回滚 */
+      }
+      throw err;
+    }
+
+    // 用户行已删除，audit_logs.user_id 若再引用会违反外键，故不传 targetUserId 之外的引用，
+    // 原 ID/用户名保留在 metadata 中供追溯。
+    this.audit.record({
+      action: AUDIT_ACTION.USER_DELETE,
+      result: AUDIT_RESULT.SUCCESS,
+      userId: admin.id,
+      metadata: { targetUserId: id, targetUsername: row.username, targetDisplayName: row.display_name },
+    });
+
+    return { id };
+  }
+
   async create(dto: CreateUserDto, admin: AuthUser): Promise<AuthUser> {
     const username = (dto.username ?? '').trim();
     const displayName = (dto.displayName ?? '').trim();

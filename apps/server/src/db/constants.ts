@@ -52,6 +52,8 @@ export const AUDIT_ACTION = {
   USER_CREATE: 'USER_CREATE',
   USER_UPDATE: 'USER_UPDATE',
   USER_PASSWORD_RESET: 'USER_PASSWORD_RESET',
+  /** 删除用户（仅限无租用/审计记录的干净用户，避免破坏审计链） */
+  USER_DELETE: 'USER_DELETE',
   /** 用户本人修改自己的登录密码（含首次登录强制改密） */
   PASSWORD_CHANGE: 'PASSWORD_CHANGE',
   CLAIM_ACCOUNT: 'CLAIM_ACCOUNT',
@@ -104,6 +106,7 @@ export const AUDIT_ACTION_LABEL: Record<keyof typeof AUDIT_ACTION, string> = {
   USER_CREATE: '新增用户',
   USER_UPDATE: '修改用户',
   USER_PASSWORD_RESET: '重置用户密码',
+  USER_DELETE: '删除用户',
   PASSWORD_CHANGE: '修改登录密码',
   USER_BULK_CREATE: '批量导入用户',
   CLAIM_ACCOUNT: '领取账号',

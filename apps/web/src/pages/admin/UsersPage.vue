@@ -16,7 +16,7 @@ import TableHead from '@/components/ui/TableHead.vue'
 import TableHeader from '@/components/ui/TableHeader.vue'
 import TableRow from '@/components/ui/TableRow.vue'
 import { toast } from '@/components/ui/toast'
-import { bulkCreateUsers, createUser, getAdminUsers, resetUserPassword, updateUser, verifyAdminPassword } from '@/api/admin'
+import { bulkCreateUsers, createUser, deleteUser, getAdminUsers, resetUserPassword, updateUser, verifyAdminPassword } from '@/api/admin'
 import { authState } from '@/api'
 import { usersCsvTemplate } from '@/lib/csv'
 import {
@@ -369,12 +369,50 @@ function openToggle(user) {
   confirm.value = { type: user.enabled ? 'disable' : 'enable', user }
 }
 
+function openDelete(user) {
+  confirm.value = { type: 'delete', user }
+}
+
+// 三种确认动作（启用/禁用/删除）共用同一个弹窗，文案与配色按类型派生
+const confirmTitle = computed(() => {
+  if (!confirm.value) return ''
+  const { type, user } = confirm.value
+  const name = user?.username ?? ''
+  if (type === 'delete') return `删除用户 ${name}`
+  return type === 'disable' ? `禁用用户 ${name}` : `启用用户 ${name}`
+})
+
+const confirmDescription = computed(() => {
+  if (confirm.value?.type === 'disable') {
+    return '禁用后该用户无法登录；若有活动租约，请先强制回收对应账号。'
+  }
+  if (confirm.value?.type === 'delete') {
+    return '删除后不可恢复。仅「创建后从未使用」的用户可删除；已有租用或操作记录的用户会被拒绝，请改用停用。'
+  }
+  return undefined
+})
+
+const confirmDestructive = computed(() => confirm.value?.type !== 'enable')
+
+const confirmActionText = computed(() => {
+  if (pending.value) return '处理中…'
+  if (confirm.value?.type === 'delete') return '确认删除'
+  return confirm.value?.type === 'disable' ? '确认禁用' : '确认启用'
+})
+
 async function onToggleConfirm() {
   const { type, user } = confirm.value
   pending.value = true
   try {
-    await updateUser(user.id, { enabled: type === 'enable' })
-    toast({ title: type === 'disable' ? '已禁用用户' : '已启用用户', variant: 'success' })
+    if (type === 'delete') {
+      await deleteUser(user.id)
+      toast({ title: `已删除用户 ${user.username}`, variant: 'success' })
+      // 删掉本页最后一条时回退一页，避免停在空页
+      if (users.value.length === 1 && page.value > 1) page.value -= 1
+    } else {
+      await updateUser(user.id, { enabled: type === 'enable' })
+      toast({ title: type === 'disable' ? '已禁用用户' : '已启用用户', variant: 'success' })
+    }
     confirm.value = null
     load()
   } catch (e) {
@@ -478,6 +516,15 @@ async function onToggleConfirm() {
                       @click="openToggle(user)"
                     >
                       {{ user.enabled ? '禁用' : '启用' }}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      class="text-ember hover:bg-status-error-soft hover:text-ember"
+                      :disabled="isSelf(user)"
+                      @click="openDelete(user)"
+                    >
+                      删除
                     </Button>
                   </div>
                 </TableCell>
@@ -663,19 +710,19 @@ async function onToggleConfirm() {
     <!-- 禁用/启用确认 -->
     <Dialog
       :open="confirm !== null"
-      :title="confirm?.type === 'disable' ? `禁用用户 ${confirm?.user?.username}` : `启用用户 ${confirm?.user?.username}`"
-      :description="confirm?.type === 'disable' ? '禁用后该用户无法登录；若有活动租约，请先强制回收对应账号。' : undefined"
-      :destructive="confirm?.type === 'disable'"
+      :title="confirmTitle"
+      :description="confirmDescription"
+      :destructive="confirmDestructive"
       @update:open="confirm = null"
     >
       <template #footer>
         <Button variant="outline" @click="confirm = null">取消</Button>
         <Button
-          :variant="confirm?.type === 'disable' ? 'destructive' : 'default'"
+          :variant="confirmDestructive ? 'destructive' : 'default'"
           :disabled="pending"
           @click="onToggleConfirm"
         >
-          {{ pending ? '处理中…' : confirm?.type === 'disable' ? '确认禁用' : '确认启用' }}
+          {{ confirmActionText }}
         </Button>
       </template>
     </Dialog>
