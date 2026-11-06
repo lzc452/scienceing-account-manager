@@ -46,6 +46,12 @@ const error = ref('')
 const users = ref([])
 const pending = ref(false)
 
+// ── 分页（后端分页，与租约/日志页保持一致的分页条样式） ──
+const PAGE_SIZE = 20
+const total = ref(0)
+const page = ref(1)
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
+
 const formOpen = ref(false)
 const formMode = ref('create')
 const formUser = ref(null)
@@ -182,14 +188,36 @@ async function onImportConfirm() {
 
 const currentUsername = computed(() => authState.user?.username)
 
-async function load() {
+async function load(opts = {}) {
+  // silent：翻页时不清空表格、不显示骨架屏，只禁用翻页按钮，避免列表闪烁
+  if (opts?.silent) pending.value = true
+  else loading.value = true
   try {
-    users.value = await getAdminUsers()
+    const res = await getAdminUsers({ page: page.value, pageSize: PAGE_SIZE })
+    users.value = res.items || []
+    total.value = res.total ?? 0
     error.value = ''
   } catch (e) {
     error.value = e?.message || '加载失败'
+    users.value = []
+    total.value = 0
   } finally {
     loading.value = false
+    pending.value = false
+  }
+}
+
+function goPrev() {
+  if (page.value > 1) {
+    page.value -= 1
+    load({ silent: true })
+  }
+}
+
+function goNext() {
+  if (page.value < totalPages.value) {
+    page.value += 1
+    load({ silent: true })
   }
 }
 
@@ -429,6 +457,16 @@ async function onToggleConfirm() {
           </TableBody>
         </Table>
       </Card>
+
+      <!-- 分页条：后端分页（与租约/日志页一致），账号池数百条时避免一次性全量渲染 -->
+      <div class="flex flex-wrap items-center justify-between gap-3 text-xs text-mid-gray">
+        <span>共 {{ total }} 条</span>
+        <div class="flex items-center gap-2">
+          <Button variant="outline" size="sm" :disabled="page <= 1 || pending" @click="goPrev">上一页</Button>
+          <span class="tabular-nums">{{ page }} / {{ totalPages }}</span>
+          <Button variant="outline" size="sm" :disabled="page >= totalPages || pending" @click="goNext">下一页</Button>
+        </div>
+      </div>
     </div>
 
     <!-- 创建 / 编辑用户（密码重置已独立为「安全验证 → 设置新密码」两段式流程） -->

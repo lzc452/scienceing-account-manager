@@ -71,8 +71,23 @@ export function bulkCreateAccounts(accounts) {
     : http('POST', '/admin/accounts/bulk', { accounts })
 }
 
-export function getAdminUsers() {
-  return USE_MOCK ? adminMockApi.listUsers() : http('GET', '/admin/users')
+/**
+ * 用户列表（分页）：GET /admin/users?page=&pageSize=
+ * 返回 { items, total, page, pageSize }，与租约/日志列表保持一致。
+ */
+export function getAdminUsers({ page = 1, pageSize = 20 } = {}) {
+  if (USE_MOCK) {
+    return Promise.resolve(adminMockApi.listUsers()).then((items) => ({
+      items,
+      total: items.length,
+      page: 1,
+      pageSize: items.length,
+    }))
+  }
+  const qs = new URLSearchParams()
+  qs.set('page', String(page))
+  qs.set('pageSize', String(pageSize))
+  return http('GET', `/admin/users?${qs.toString()}`)
 }
 
 export function createUser(dto) {

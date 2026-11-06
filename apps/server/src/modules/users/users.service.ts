@@ -24,9 +24,30 @@ export class UsersService {
     private readonly audit: AuditService,
   ) {}
 
-  list(): AuthUser[] {
-    const rows = this.dbService.db.prepare('SELECT * FROM users ORDER BY id').all() as unknown as UserRow[];
-    return rows.map(toAuthUser);
+  /**
+   * 用户列表（分页）。返回结构与 `/admin/leases`、`/admin/logs` 保持一致：
+   * `{ items, total, page, pageSize }`。
+   *
+   * 为什么要分页：账号池可达数百条，一次性全量返回会让前端渲染卡顿、
+   * 响应体过大，且表格无法定位。pageSize 上限 100，防止前端传超大值绕过。
+   */
+  list(query: { page?: number; pageSize?: number } = {}): {
+    items: AuthUser[];
+    total: number;
+    page: number;
+    pageSize: number;
+  } {
+    const page = Math.max(1, Math.trunc(query.page ?? 1));
+    const pageSize = Math.min(100, Math.max(1, Math.trunc(query.pageSize ?? 20)));
+
+    const total = this.dbService.db.prepare('SELECT COUNT(*) AS c FROM users').get() as unknown as {
+      c: number;
+    };
+    const rows = this.dbService.db
+      .prepare('SELECT * FROM users ORDER BY id LIMIT ? OFFSET ?')
+      .all(pageSize, (page - 1) * pageSize) as unknown as UserRow[];
+
+    return { items: rows.map(toAuthUser), total: total.c, page, pageSize };
   }
 
   async create(dto: CreateUserDto, admin: AuthUser): Promise<AuthUser> {
