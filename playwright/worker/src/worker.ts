@@ -1,6 +1,7 @@
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import type { WorkerConfig } from './config';
 import { isAuthenticated, loadStorageState, loginAdmin, saveStorageState } from './auth';
+import { installCdnMirrorRouting } from './cdn-mirror';
 import { performReset } from './reset-flow';
 import { runQueueSerial, runWithRetry } from './pipeline';
 
@@ -55,6 +56,8 @@ export class ResetWorker {
     this.context = stored
       ? await this.browser.newContext({ storageState: stored })
       : await this.browser.newContext();
+    // 必须在建页/跳转前装好：科应页面 gate 在 cdnjs 的 MathJax 上，机房出口拉不到会白屏。
+    await installCdnMirrorRouting(this.context);
     this.page = await this.context.newPage();
     await this.page.setDefaultTimeout(this.config.defaultTimeoutMs);
   }

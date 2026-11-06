@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import type { Browser, BrowserContext, Page } from 'playwright';
 import type { WorkerConfig } from './config';
 import { buildSelectors } from './selectors';
+import { installCdnMirrorRouting } from './cdn-mirror';
 import { log } from './logger';
 
 /**
@@ -213,6 +214,7 @@ export async function openAuthenticatedSession(
 ): Promise<AuthSession> {
   const stored = await loadStorageState(config);
   const context = stored ? await browser.newContext({ storageState: stored }) : await browser.newContext();
+  await installCdnMirrorRouting(context);
   const page = await context.newPage();
   await page.setDefaultTimeout(config.defaultTimeoutMs);
   await page.goto(config.adminUrl);

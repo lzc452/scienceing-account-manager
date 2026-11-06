@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import { loadConfigFromEnv, type WorkerConfig } from './config';
 import { initLogger, log, logJson } from './logger';
 import { loginAdmin, saveStorageState } from './auth';
+import { installCdnMirrorRouting } from './cdn-mirror';
 import { checkHealth } from './health';
 import { ResetWorker, type ResetJobInput } from './worker';
 
@@ -97,6 +98,7 @@ async function cmdLogin(): Promise<void> {
   log('浏览器已启动');
   try {
     const context = await browser.newContext();
+    await installCdnMirrorRouting(context);
     const page = await context.newPage();
     await page.setDefaultTimeout(config.defaultTimeoutMs);
     await loginAdmin(page, config);
