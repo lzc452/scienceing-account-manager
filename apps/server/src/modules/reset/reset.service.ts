@@ -10,7 +10,21 @@ import { redactSecrets } from '../../lib/redact';
 import { RESET_EXECUTOR, type ResetExecutor } from '../automation/automation.types';
 import type { AccountRow } from '../leases/leases.types';
 
-const MAX_ATTEMPTS = 3;
+/**
+ * 单次改密的最大尝试次数。
+ *
+ * 从 3 降到 1 的理由：
+ *  - 科应改密是「浏览器自动化」而非幂等接口，失败原因绝大多数是**环境/账号层面**的
+ *    （账号在科应上不存在、被风控、扩展页面结构改版），重试不会让它们变好，
+ *    只会让队列在同一个账号上空转三次，把真实回收的等待时间拉长到原来的三倍。
+ *  - 连续三次自动改密天生带有「密码暴力尝试」的外观，容易触发科应风控。
+ *  - 失败即 ERROR + 一条审计，由管理员看见并决定是重试还是修数据；
+ *    自动重试的收益远小于它掩盖问题的代价。
+ *
+ * 注意 `requeueFatal` 不受此影响：配置类致命错误仍会把 job 原样退回 PENDING
+ * 并**回退**尝试次数，因为那不是「这个账号改不了」，而是「整个 Worker 现在不可用」。
+ */
+const MAX_ATTEMPTS = 1;
 
 export interface ResetJobRow {
   id: number;
@@ -149,8 +163,10 @@ export class ResetService {
     const now = nowIso();
     db.exec('BEGIN IMMEDIATE');
     try {
+      // rotation_due_reason / rotation_not_before 一并清空：改密成功即「还清」，
+      // 留着会让账号永久显示「欠一次改密」，也会让下一轮清扫误判为未处理。
       db.prepare(
-        "UPDATE scienceing_accounts SET current_password_ciphertext = pending_password_ciphertext, pending_password_ciphertext = NULL, status = ?, last_password_changed_at = ?, updated_at = ? WHERE id = ?",
+        "UPDATE scienceing_accounts SET current_password_ciphertext = pending_password_ciphertext, pending_password_ciphertext = NULL, status = ?, last_password_changed_at = ?, rotation_due_reason = NULL, rotation_not_before = NULL, updated_at = ? WHERE id = ?",
       ).run(ACCOUNT_STATUS.AVAILABLE, now, now, accountId);
       if (leaseId) {
         db.prepare("UPDATE leases SET status = ?, released_at = ?, updated_at = ? WHERE id = ? AND status = ?").run(
@@ -172,13 +188,13 @@ export class ResetService {
       throw err;
     }
 
-    const account = db.prepare('SELECT code FROM scienceing_accounts WHERE id = ?').get(accountId) as unknown as { code: string };
+    const account = this.lookupAccountCode(accountId);
     this.audit.record({
       action: AUDIT_ACTION.RESET_SUCCESS,
       result: AUDIT_RESULT.SUCCESS,
       accountId,
       leaseId,
-      metadata: { accountCode: account.code },
+      metadata: { accountCode: account },
     });
   }
 
@@ -213,14 +229,29 @@ export class ResetService {
       throw err;
     }
 
-    const account = db.prepare('SELECT code FROM scienceing_accounts WHERE id = ?').get(accountId) as unknown as { code: string };
+    const account = this.lookupAccountCode(accountId);
     this.audit.record({
       action: AUDIT_ACTION.RESET_FAILED,
       result: AUDIT_RESULT.FAILED,
       accountId,
       leaseId,
-      metadata: { accountCode: account.code, error: error.slice(0, 200) },
+      metadata: { accountCode: account, error: error.slice(0, 200) },
     });
+  }
+
+  /**
+   * 取账号 code 用于审计。
+   *
+   * 账号可能已被删除（管理员删号 / 库被清理），此时**不能直接读 .code**：
+   * 那会在 completeFailure 里抛 TypeError，把本该落定的 job 留在 RUNNING，
+   * 而调度器只捡 PENDING —— 于是一条「失败任务」变成永久卡死，
+   * 正好违反了 L1-3 要守的不变量。查不到就退化成 `#<id>`。
+   */
+  private lookupAccountCode(accountId: number): string {
+    const row = this.dbService.db
+      .prepare('SELECT code FROM scienceing_accounts WHERE id = ?')
+      .get(accountId) as unknown as { code: string } | undefined;
+    return row?.code ?? `#${accountId}`;
   }
 
   /**

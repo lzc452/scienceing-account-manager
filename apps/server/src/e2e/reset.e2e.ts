@@ -110,12 +110,10 @@ test('端到端成功：超时→RECYCLING→job→SUCCESS→AVAILABLE→Lease R
   assert.equal(job.status, 'SUCCESS');
 });
 
-test('端到端失败：3 次重试后 →ERROR + lease FAILED', async () => {
+test('端到端失败：一次失败即 →ERROR + lease FAILED（不再自动重试）', async () => {
   const { accountId, leaseId } = await claimAndTimeout();
   const resetService = app.get(ResetService);
 
-  await resetService.processPendingJobs(failExecutor);
-  await resetService.processPendingJobs(failExecutor);
   await resetService.processPendingJobs(failExecutor);
 
   const account = db
@@ -131,7 +129,12 @@ test('端到端失败：3 次重试后 →ERROR + lease FAILED', async () => {
     .prepare('SELECT status, attempt_count FROM reset_jobs WHERE lease_id = ? ORDER BY id DESC LIMIT 1')
     .get(leaseId) as unknown as { status: string; attempt_count: number };
   assert.equal(job.status, 'FAILED');
-  assert.equal(job.attempt_count, 3);
+  // MAX_ATTEMPTS=1：失败一次就收手，不再连撞三次风控
+  assert.equal(job.attempt_count, 1);
+
+  // 队列里不该再留可消费的任务：否则同一账号会被反复改密
+  const second = await resetService.processPendingJobs(failExecutor);
+  assert.equal(second.processed, 0);
 });
 
 test('健康检查返回三项结果 + 立即检测', async () => {

@@ -172,7 +172,9 @@ test('L1-3: 账号不存在时 job 不再永久卡在 RUNNING', async () => {
 
   const job = db.prepare('SELECT status, error_message FROM reset_jobs WHERE id = 1').get();
   assert.notEqual(job.status, 'RUNNING', 'getAccount 抛错后 job 不得停在 RUNNING');
-  assert.equal(job.status, 'PENDING', '尝试次数未耗尽，应退回 PENDING 等待重试');
+  // MAX_ATTEMPTS=1 之后不再退回 PENDING，而是直接终结：
+  // 账号都不存在了，重试一万次也不会成功，只会占着队列
+  assert.equal(job.status, 'FAILED', '账号已不存在，应一次失败即终结');
   assert.ok(job.error_message, '必须记录失败原因');
 });
 
@@ -198,7 +200,7 @@ test('L1-4: 致命配置错误不消耗尝试次数，并暂停队列', async ()
   assert.equal(jobs[1].attempt_count, 0);
 });
 
-test('L1-4: 普通业务失败仍然照常消耗尝试次数', async () => {
+test('L1-4: 普通业务失败一次即终结，不再自动重试', async () => {
   const db = freshDb();
   seedAccount(db, { id: 1, status: 'RECYCLING' });
   seedJob(db, { id: 1, accountId: 1 });
@@ -209,8 +211,10 @@ test('L1-4: 普通业务失败仍然照常消耗尝试次数', async () => {
   const r = await svc.processPendingJobs();
   assert.equal(r.failed, 1);
   const job = db.prepare('SELECT status, attempt_count FROM reset_jobs WHERE id = 1').get();
-  assert.equal(job.status, 'PENDING');
-  assert.equal(job.attempt_count, 1, '普通失败应保留这次尝试');
+  // MAX_ATTEMPTS 由 3 降为 1：连续自动改密天生带「密码暴力尝试」的外观，
+  // 且失败原因多为环境/账号层面，重试不会变好 —— 一次失败即转人工
+  assert.equal(job.status, 'FAILED');
+  assert.equal(job.attempt_count, 1, '普通失败应记录这一次尝试');
 });
 
 // ───────────────────────── L1-7 ─────────────────────────
