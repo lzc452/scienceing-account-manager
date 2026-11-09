@@ -289,10 +289,25 @@ const dialogMeta = computed(() => {
   // 将重置 {{ resetTarget.code }}（{{ resetTarget.username }}）的密码并回收其活动租约。
   const { type, account } = dialog.value
   if (type === 'force-release') {
-    return { title: `强制回收 ${account.code}`, description: '将重置密码并立即退出当前使用人的科应会话。', destructive: true, confirm: '确认回收' }
+    return {
+      title: `强制回收 ${account.code}`,
+      description: '将立即收回账号并清理使用人机器上的科应登录；若那台机器够不着（已关浏览器），则自动改密兜底。',
+      destructive: true,
+      confirm: '确认回收',
+    }
   }
   if (type === 'reset-password') {
-    return { title: '重置密码', description: '', destructive: false, confirm: '确认重置' }
+    // DIRTY = 还在等客户端清理回执。此时改密等于「放弃等待」，语义上不同于普通的主动重置，
+    // 文案必须区分开，否则管理员会以为自己只是改了个密码。
+    const dirty = account.status === 'DIRTY'
+    return {
+      title: dirty ? `立即改密 ${account.code}` : '重置密码',
+      description: dirty
+        ? '该账号正在等待客户端确认清理完成。立即改密会放弃等待，直接重置密码并把账号放回可用池。'
+        : '',
+      destructive: dirty,
+      confirm: dirty ? '确认改密' : '确认重置',
+    }
   }
   if (type === 'disable') {
     return { title: `禁用账号 ${account.code}`, description: '禁用后该账号不可再被领取；若有活动租约将一并回收。', destructive: true, confirm: '确认禁用' }
@@ -396,7 +411,7 @@ async function onFix(account) {
           v-for="account in errorAccounts"
           :key="account.id"
           :account-code="account.code"
-          error-text="改密失败：科应后台未能完成重置（Worker 已自动重试），可重试；若已人工处理完成请标记可用。"
+          error-text="改密失败：科应后台未能完成重置（一次失败即转异常，不再自动重试）。可手动重试；若已人工处理完成请标记可用。"
           @retry="onRetry(account)"
           @fix="onFix(account)"
         />
@@ -481,7 +496,7 @@ async function onFix(account) {
                         size="sm"
                         @click="openDialog('reset-password', account)"
                       >
-                        重置密码
+                        {{ account.status === 'DIRTY' ? '立即改密' : '重置密码' }}
                       </Button>
                       <Button
                         v-if="account.status === 'ERROR'"

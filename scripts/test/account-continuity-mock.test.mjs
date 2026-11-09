@@ -9,7 +9,10 @@ test('Mock 领取、历史和管理操作共享账号状态，并隔离各用户
   const recycling = [];
   const globals = {
     reactive: (value) => value,
-    setTimeout: (callback, ms) => { if (ms === 5000) recycling.push(callback); else queueMicrotask(callback); },
+    // mock 里的「异步回收完成」回调用 >=1s 的延时，其余都是 delay() 的几十毫秒。
+    // 按量级判断而不是钉死某个数字：回收链路从 5s 改密改成 1.5s 清理时，
+    // 写死 5000 会让 recycling 数组为空、pop() 直接抛 TypeError。
+    setTimeout: (callback, ms) => { if (ms >= 1000) recycling.push(callback); else queueMicrotask(callback); },
     isPasswordAllowed: () => true, passwordPolicyMessage: () => '',
   };
   const source = readFileSync(new URL('../../apps/web/src/api/mock.js', import.meta.url), 'utf8')

@@ -10,14 +10,16 @@ import { DatabaseService } from '../db/database.service';
 import { seedDatabase } from '../db/seed';
 import { hashPassword } from '../crypto/password';
 import { LeasesService } from '../modules/leases/leases.service';
-import { claimAsExtension, provisionSeedAccounts } from './extension-fixture';
+import { claimAsExtension, completeSeedAdminFirstLogin, provisionSeedAccounts } from './extension-fixture';
 
 const MASTER_KEY_HEX = '06bd85dc11dd5998a014a042afb70e714c41f6d46a94b1b119cfd26bff999e54';
 const ADMIN_PASSWORD = 'admin123456';
+const ADMIN_NEW_PASSWORD = 'admin-changed-123';
 
 let app: INestApplication;
 let db: DatabaseSync;
 let userToken: string;
+let adminToken: string;
 
 function nowIso(offsetMs = 0): string {
   return new Date(Date.now() + offsetMs).toISOString();
@@ -99,6 +101,9 @@ before(async () => {
     .send({ username: 'u1', password: 'u1-pass' });
   assert.equal(login.status, 200, `测试用户登录失败：${JSON.stringify(login.body)}`);
   userToken = login.body.token as string;
+
+  // 管理员会话：seed 的 admin 带首次改密标记，走真实流程换一次密码再取 token
+  adminToken = await completeSeedAdminFirstLogin(app, ADMIN_PASSWORD, ADMIN_NEW_PASSWORD);
 });
 
 after(async () => {
@@ -307,4 +312,44 @@ test('超时回收：新扩展进入 DIRTY 等待清理，而不是直接改密'
   };
   assert.equal(lease.status, 'RECYCLING');
   assert.equal(lease.release_reason, 'INACTIVITY_TIMEOUT');
+});
+
+test('管理员对 DIRTY 账号「立即改密」：放弃等待回执，转 RECYCLING 并记 ADMIN_REQUEST', async () => {
+  resetPool();
+  const { leaseId, accountId } = await claimOne('1.5.0');
+  await releaseLease(leaseId);
+  assert.equal(accountOf(accountId).status, 'DIRTY');
+
+  const res = await request(app.getHttpServer())
+    .post(`/api/admin/accounts/${accountId}/reset-password`)
+    .set('Authorization', `Bearer ${adminToken}`);
+  assert.equal(res.status, 201, `管理员改密失败：${JSON.stringify(res.body)}`);
+  assert.equal(res.body.status, 'RECYCLING');
+
+  const account = accountOf(accountId);
+  assert.equal(account.status, 'RECYCLING');
+  assert.equal(account.rotation_due_reason, 'ADMIN_REQUEST', '欠密原因必须可追溯');
+  assert.equal(account.dirty_since, null, '已转改密流程，不再等客户端回执');
+  assert.equal(countJobs(), 1);
+});
+
+test('DIRTY 账号在管理员「立即改密」后，迟到的清理回执不能把它拉回可用池', async () => {
+  resetPool();
+  const { leaseId, accountId, leaseToken } = await claimOne('1.5.0');
+  await releaseLease(leaseId);
+
+  // 管理员抢先一步改成改密
+  await request(app.getHttpServer())
+    .post(`/api/admin/accounts/${accountId}/reset-password`)
+    .set('Authorization', `Bearer ${adminToken}`);
+
+  // 扩展这时才把回执发上来
+  const res = await ack(leaseId, leaseToken, { ok: true, method: 'PAGE' });
+  assert.equal(res.status, 201);
+  assert.equal(res.body.ok, false);
+  assert.equal(res.body.reason, 'ALREADY_ROTATING');
+
+  // 关键：不能被拉回 AVAILABLE —— 那会放出一个密码即将变化的账号
+  const account = accountOf(accountId);
+  assert.equal(account.status, 'RECYCLING');
 });

@@ -326,13 +326,26 @@ export class AdminService {
     return row?.value ?? fallback;
   }
 
-  /** 手动重置密码（两阶段 Phase 1）：生成 pending 密码 → RECYCLING + reset_job（PRD §30）。 */
+  /**
+   * 手动重置密码（两阶段 Phase 1）：生成 pending 密码 → RECYCLING + reset_job（PRD §30）。
+   *
+   * 对 DIRTY 账号同样适用，语义是「放弃等待客户端清理回执，直接改密收尾」——
+   * 这是管理员在遇到「清理迟迟不确认」时的唯一手动出路。
+   */
   resetPassword(accountId: number, adminUser: AuthUser): { accountId: number; status: string } {
     const account = this.getAccount(accountId);
     if (account.status === ACCOUNT_STATUS.RECYCLING) {
       throw new ConflictException('账号正在回收中');
     }
     this.enqueueReset(account, adminUser, AUDIT_ACTION.RESET_PASSWORD);
+
+    if (account.status === ACCOUNT_STATUS.DIRTY) {
+      // 欠密原因落库（008 的 CHECK 白名单里有 ADMIN_REQUEST），
+      // 同时清掉 dirty_since：账号已转入改密流程，不再等回执。
+      this.dbService.db
+        .prepare('UPDATE scienceing_accounts SET rotation_due_reason = ?, dirty_since = NULL, updated_at = ? WHERE id = ?')
+        .run('ADMIN_REQUEST', nowIso(), accountId);
+    }
     return { accountId, status: ACCOUNT_STATUS.RECYCLING };
   }
 

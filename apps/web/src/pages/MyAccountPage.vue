@@ -29,9 +29,12 @@ const account = ref(null)
 const releasing = ref(false)
 const confirmOpen = ref(false)
 const releasePending = ref(false)
+/** 归还后走的是哪条链路：PURGE=清本机登录（零改密），ROTATE=改密。决定结果文案。 */
+const releaseMode = ref('PURGE')
 const usernameCopied = ref(false)
 
 let usernameCopyTimer
+let returnTimer
 
 const accountUsername = computed(() => account.value?.username || lease.value?.accountUsername || '')
 
@@ -72,6 +75,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.clearInterval(pollTimer)
+  window.clearTimeout(returnTimer)
   window.removeEventListener('message', onExtensionAck)
   if (usernameCopyTimer !== undefined) window.clearTimeout(usernameCopyTimer)
 })
@@ -123,15 +127,25 @@ async function onRelease() {
   if (!lease.value || releasing.value) return
   releasing.value = true
   try {
-    await releaseLease(lease.value.id)
+    const res = await releaseLease(lease.value.id)
     sessionStorage.removeItem('scienceing_lease_token')
+    // 后端按客户端能力分流：PURGE 会先清本机登录（账号短暂进入「清理中」），
+    // ROTATE 则直接改密。文案必须跟着实际链路走，否则会承诺一件不会发生的事。
+    releaseMode.value = res?.recycleMode === 'ROTATE' ? 'ROTATE' : 'PURGE'
     releasePending.value = true
     confirmOpen.value = false
     lease.value = null
     account.value = null
-    toast({ title: '已提交归还', description: '账号正在回收，密码重置后即可重新领取' })
-    // 重定向到首页
-    router.push('/')
+    toast(
+      releaseMode.value === 'PURGE'
+        ? { title: '已归还账号', description: '正在退出这台机器上的科应登录，账号已回到可用池。' }
+        : { title: '已归还账号', description: '账号正在回收，改密完成后即可重新领取。' },
+    )
+    // 停顿 3 秒再回首页：归还后确实有一段清理动作，立刻跳走会让人以为「点了没反应」。
+    window.clearTimeout(returnTimer)
+    returnTimer = window.setTimeout(() => {
+      if (releasePending.value) router.push('/')
+    }, 3000)
   } catch (e) {
     toast({ title: e?.message || '归还失败', variant: 'destructive' })
   } finally {
@@ -248,11 +262,20 @@ async function onRelease() {
         </div>
       </Card>
 
-      <!-- 归还中信息条（本地瞬时态） -->
+      <!-- 归还后信息条（本地瞬时态）：按实际链路给不同结论 -->
       <Card v-else-if="releasePending">
         <div class="p-4 sm:p-5">
-          <Badge tone="recycling">账号正在回收</Badge>
-          <p class="mt-3 text-sm text-mid-gray">密码重置后即可重新领取。</p>
+          <Badge :tone="releaseMode === 'PURGE' ? 'dirty' : 'recycling'">
+            {{ releaseMode === 'PURGE' ? '正在退出科应登录' : '账号正在回收' }}
+          </Badge>
+          <p class="mt-3 text-sm text-mid-gray">
+            {{
+              releaseMode === 'PURGE'
+                ? '助手正在清理这台机器上的科应登录状态，完成后账号即可被别人领取。若科应页面没有自动退出，直接关闭该标签页即可。'
+                : '密码重置完成后即可重新领取。'
+            }}
+          </p>
+          <Button variant="outline" class="mt-4" @click="router.push('/')">返回首页</Button>
         </div>
       </Card>
 
@@ -269,13 +292,13 @@ async function onRelease() {
     <Dialog
       v-model:open="confirmOpen"
       title="立即归还"
-      description="归还后将重置密码并退出当前科应会话。"
+      description="归还后该账号会立即回到可用池，你在这台机器上的科应登录将被清理。"
       destructive
     >
       <template #footer="{ close }">
         <Button variant="outline" @click="close">取消</Button>
         <Button variant="destructive" :disabled="releasing" @click="onRelease">
-          {{ releasing ? '回收中…' : '确认归还' }}
+          {{ releasing ? '正在归还…' : '确认归还' }}
         </Button>
       </template>
     </Dialog>

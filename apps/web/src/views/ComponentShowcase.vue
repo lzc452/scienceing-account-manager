@@ -231,7 +231,7 @@ const filterOptions = [
     <Dialog
       v-model:open="dialogOpen"
       title="立即归还 KY-03"
-      description="归还后将重置密码并退出当前科应会话。"
+      description="归还后该账号会立即回到可用池，你在这台机器上的科应登录将被清理。"
       destructive
     >
       <template #footer="{ close }">

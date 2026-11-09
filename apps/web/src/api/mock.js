@@ -259,20 +259,30 @@ async function release(id) {
   lease.status = 'RECYCLING'
   lease.releaseReason = 'USER_RETURN'
   lease.releaseRequestedAt = nowIso()
-  const account = state.pool.find((a) => a.id === lease.accountId)
-  if (account) account.status = 'RECYCLING'
 
-  // 模拟 Playwright 改密完成后账号回到可用（5 秒后释放）
+  // 与后端保持同一语义：PURGE 链路下账号先进入 DIRTY（等客户端清理并回执），
+  // 而不是直接 RECYCLING。mock 里没有真实扩展，1.5 秒后模拟回执成功。
+  const account = state.pool.find((a) => a.id === lease.accountId)
+  if (account) {
+    account.status = 'DIRTY'
+    account.dirtySince = nowIso()
+  }
+
   setTimeout(() => {
     if (lease.status === 'RECYCLING') {
       lease.status = 'RELEASED'
       lease.releasedAt = nowIso()
+      lease.purgeAckAt = nowIso()
+      lease.purgeMethod = 'PAGE'
       const acc = state.pool.find((a) => a.id === lease.accountId)
-      if (acc) acc.status = 'AVAILABLE'
+      if (acc && acc.status === 'DIRTY') {
+        acc.status = 'AVAILABLE'
+        acc.dirtySince = null
+      }
     }
-  }, 5000)
+  }, 1500)
 
-  return { leaseId: id, status: 'RECYCLING', releaseReason: 'USER_RETURN' }
+  return { leaseId: id, status: 'RECYCLING', releaseReason: 'USER_RETURN', recycleMode: 'PURGE', accountStatus: 'DIRTY' }
 }
 
 /**
