@@ -5,6 +5,8 @@ export interface AccountAvailability {
   total: number;
   available: number;
   inUse: number;
+  /** 回收隔离态：等客户端确认已清空本机会话，暂不可发放 */
+  dirty: number;
   recycling: number;
   error: number;
 }
@@ -37,17 +39,19 @@ export class AccountsService {
            COUNT(*) AS total,
            COUNT(*) FILTER (WHERE status = 'AVAILABLE') AS available,
            COUNT(*) FILTER (WHERE status = 'IN_USE') AS in_use,
+           COUNT(*) FILTER (WHERE status = 'DIRTY') AS dirty,
            COUNT(*) FILTER (WHERE status = 'RECYCLING') AS recycling,
            COUNT(*) FILTER (WHERE status = 'ERROR') AS error
          FROM scienceing_accounts
          WHERE enabled = 1`,
       )
-      .get() as { total: number; available: number; in_use: number; recycling: number; error: number };
+      .get() as { total: number; available: number; in_use: number; dirty: number; recycling: number; error: number };
 
     return {
       total: row.total,
       available: row.available,
       inUse: row.in_use,
+      dirty: row.dirty,
       recycling: row.recycling,
       error: row.error,
     };

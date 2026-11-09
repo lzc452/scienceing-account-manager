@@ -27,7 +27,7 @@ const router = useRouter()
 
 const loading = ref(true)
 const error = ref('')
-const availability = ref({ total: 0, available: 0, inUse: 0, recycling: 0, error: 0 })
+const availability = ref({ total: 0, available: 0, inUse: 0, dirty: 0, recycling: 0, error: 0 })
 const pool = ref([])
 const hasActiveLease = ref(false)
 const activeAccountId = ref(null)
@@ -221,12 +221,15 @@ function openAccount(card) {
           </div>
         </div>
 
-        <div v-else class="grid grid-cols-2 gap-px bg-hairline sm:grid-cols-4">
+        <div v-else class="grid grid-cols-2 gap-px bg-hairline sm:grid-cols-5">
           <div class="bg-paper p-4 sm:p-5">
             <StatBlock label="可用" :value="availability.available" dot="#16a34a" />
           </div>
           <div class="bg-paper p-4 sm:p-5">
             <StatBlock label="使用中" :value="availability.inUse" dot="#2563eb" />
+          </div>
+          <div class="bg-paper p-4 sm:p-5">
+            <StatBlock label="清理中" :value="availability.dirty" dot="#d97706" />
           </div>
           <div class="bg-paper p-4 sm:p-5">
             <StatBlock label="回收中" :value="availability.recycling" dot="#d97706" />

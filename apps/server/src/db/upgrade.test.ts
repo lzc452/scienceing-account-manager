@@ -132,7 +132,8 @@ test('迁移失败后从 Backup API 快照恢复旧结构、记录与版本', as
     const before = businessSnapshots(old);
     const fingerprint = schemaFingerprint(old);
     const snapshot = await createDatabaseBackup(old, join(root, 'backups'), 'predeploy');
-    const broken = [...MIGRATIONS, { version: 8, name: 'broken', sql: 'ALTER TABLE users ADD COLUMN temporary TEXT; INSERT INTO missing_table VALUES(1)' }];
+    // 版本号跟着迁移数量走，避免以后每加一个迁移就要回来改这个数字
+    const broken = [...MIGRATIONS, { version: MIGRATIONS.length + 1, name: 'broken', sql: 'ALTER TABLE users ADD COLUMN temporary TEXT; INSERT INTO missing_table VALUES(1)' }];
     assert.throws(() => migrate(old, broken), /missing_table/);
     assert.equal(schemaFingerprint(old), fingerprint);
     assert.equal(old.prepare('PRAGMA table_info(schema_migrations)').all().length, 3);

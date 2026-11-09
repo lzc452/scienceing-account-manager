@@ -180,6 +180,32 @@ test('leases / logs / settings / extension config 端点', async () => {
   assert.equal(ext.body.inactivityTimeoutSeconds, 12 * 60 * 60);
   assert.equal(ext.body.warningSeconds, 2 * 60 * 60);
   assert.equal(ext.body.criticalWarningSeconds, 60 * 60);
+
+  // 设置项白名单与范围校验：未知键、越界值、跨字段冲突都必须被拒，
+  // 否则一个非法 recycle_mode 就能让整个回收链路按错误模式运行。
+  const unknownKey = await request(app.getHttpServer())
+    .post('/api/admin/settings')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ not_a_setting: '1' });
+  assert.equal(unknownKey.status, 400);
+
+  const outOfRange = await request(app.getHttpServer())
+    .post('/api/admin/settings')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ purge_ack_timeout_seconds: '5' });
+  assert.equal(outOfRange.status, 400);
+
+  const badMode = await request(app.getHttpServer())
+    .post('/api/admin/settings')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ recycle_mode: 'FOO' });
+  assert.equal(badMode.status, 400);
+
+  const conflict = await request(app.getHttpServer())
+    .post('/api/admin/settings')
+    .set('Authorization', `Bearer ${adminToken}`)
+    .send({ warning_hours: '1', critical_warning_hours: '2' });
+  assert.equal(conflict.status, 400);
 });
 
 test('审计日志写入且不含敏感值', async () => {

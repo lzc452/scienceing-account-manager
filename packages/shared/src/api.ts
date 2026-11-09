@@ -67,6 +67,8 @@ export interface AccountAvailabilityDto {
   total: number;
   available: number;
   inUse: number;
+  /** 回收隔离态（等客户端确认清理），暂不可发放 */
+  dirty: number;
   recycling: number;
   /** 异常账号数（PRODUCT-DESIGN §5.1 Stat Block 第 4 项） */
   error: number;

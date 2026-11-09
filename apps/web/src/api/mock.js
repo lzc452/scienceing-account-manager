@@ -68,11 +68,12 @@ function remainingOf(account) {
 }
 
 function availability() {
-  const counts = { total: 0, available: 0, inUse: 0, recycling: 0, error: 0 }
+  const counts = { total: 0, available: 0, inUse: 0, dirty: 0, recycling: 0, error: 0 }
   for (const a of state.pool) {
     counts.total += 1
     if (a.status === 'AVAILABLE') counts.available += 1
     else if (a.status === 'IN_USE') counts.inUse += 1
+    else if (a.status === 'DIRTY') counts.dirty += 1
     else if (a.status === 'RECYCLING') counts.recycling += 1
     else if (a.status === 'ERROR') counts.error += 1
   }

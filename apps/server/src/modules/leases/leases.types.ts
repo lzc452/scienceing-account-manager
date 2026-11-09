@@ -10,6 +10,16 @@ export interface AccountRow {
   enabled: number;
   created_at: string;
   updated_at: string;
+  /** 进入 DIRTY 的时间（迁移 008 新增），用于 ack 超时判定与排障。 */
+  dirty_since: string | null;
+  /** 清理确认失败次数（只统计客户端自报失败，用于告警与人工判断）。 */
+  purge_attempts: number;
+  /** 最近一次确认清理完成的时间；与 release_requested_at 比较构成"已清理"不变式。 */
+  last_purge_ack_at: string | null;
+  /** 非空表示"欠一次改密"，取值见迁移 008 的 CHECK。 */
+  rotation_due_reason: string | null;
+  /** 24h 频次护栏的解禁时间；空表示立即可改。 */
+  rotation_not_before: string | null;
 }
 
 /** leases 表行（snake_case，与 DB 一致） */
@@ -27,6 +37,12 @@ export interface LeaseRow {
   extension_version: string | null;
   created_at: string;
   updated_at: string;
+  /** 客户端回执收到时间（迁移 008 新增）。 */
+  purge_ack_at: string | null;
+  /** 清理通道：PAGE（有页面，可回读）/ BROWSING_DATA（无页面，不可回读）/ FAILED。 */
+  purge_method: string | null;
+  /** 清理回执的补充信息（JSON 字符串，已截断）。 */
+  purge_detail: string | null;
 }
 
 /** 租约对外视图（camelCase，对应 @scienceing/shared LeaseDto） */

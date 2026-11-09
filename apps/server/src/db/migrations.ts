@@ -5,6 +5,7 @@ import { migration004 } from './migrations/004_add_manuals';
 import { migration005 } from './migrations/005_add_first_login_flag';
 import { migration006 } from './migrations/006_add_extension_claim_proofs';
 import { migration007 } from './migrations/007_settings_lease_rule_hours';
+import { migration008 } from './migrations/008_dirty_recycle';
 import type { Migration } from './migrations/migration';
 
 export type { Migration } from './migrations/migration';
@@ -21,6 +22,7 @@ export const MIGRATIONS: readonly Migration[] = [
   migration005,
   migration006,
   migration007,
+  migration008,
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;

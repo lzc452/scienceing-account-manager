@@ -53,6 +53,8 @@ export interface DashboardStats {
     accountDisabled: number;
     available: number;
     inUse: number;
+    /** 回收隔离态（等客户端确认清理） */
+    dirty: number;
     recycling: number;
     error: number;
     activeLeases: number;
@@ -153,6 +155,7 @@ export class DashboardService {
            COUNT(*) FILTER (WHERE enabled = 0) AS disabled_count,
            COUNT(*) FILTER (WHERE status = 'AVAILABLE' AND enabled = 1) AS available,
            COUNT(*) FILTER (WHERE status = 'IN_USE' AND enabled = 1)     AS in_use,
+           COUNT(*) FILTER (WHERE status = 'DIRTY' AND enabled = 1)      AS dirty,
            COUNT(*) FILTER (WHERE status = 'RECYCLING' AND enabled = 1)  AS recycling,
            COUNT(*) FILTER (WHERE status = 'ERROR' AND enabled = 1)      AS error
          FROM scienceing_accounts`,
@@ -163,6 +166,7 @@ export class DashboardService {
       disabled_count: number;
       available: number;
       in_use: number;
+      dirty: number;
       recycling: number;
       error: number;
     };
@@ -196,6 +200,7 @@ export class DashboardService {
       accountDisabled: statusRow.disabled_count,
       available: statusRow.available,
       inUse: statusRow.in_use,
+      dirty: statusRow.dirty,
       recycling: statusRow.recycling,
       error: statusRow.error,
       activeLeases: leaseRow.active_leases,

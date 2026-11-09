@@ -17,6 +17,15 @@ export const STATUS_META = {
     softBg: '#eff6ff',
     softText: '#1d4ed8',
   },
+  // DIRTY（回收隔离态）：等扩展确认已清空本机会话，通常几秒。
+  // 与「回收中」同色但**不旋转**——旋转代表服务端正在跑改密任务，两者含义不同。
+  dirty: {
+    label: '清理中',
+    dot: '#d97706',
+    softBg: '#fffbeb',
+    softText: '#b45309',
+    hollow: true,
+  },
   recycling: {
     label: '回收中',
     dot: '#d97706',
@@ -42,12 +51,16 @@ export const STATUS_META = {
 
 /**
  * 将任意后端状态字符串（Account / Lease）归一为 StatusKind。
- * 后端约定：AVAILABLE/IN_USE/RECYCLING/ERROR、ACTIVE→in_use、RELEASED→released 等。
+ * 后端约定：AVAILABLE/IN_USE/DIRTY/RECYCLING/ERROR、ACTIVE→in_use、RELEASED→released 等。
+ *
+ * 注意 DIRTY 必须显式匹配：漏掉会落到最后的 'released'，
+ * 首页就会把「正在清理、暂不可领」的账号显示成「已释放」，诱导用户去点领取。
  */
 export function toStatusKind(raw) {
   const v = (raw ?? '').toUpperCase()
   if (v === 'AVAILABLE') return 'available'
   if (v === 'IN_USE' || v === 'ACTIVE') return 'in_use'
+  if (v === 'DIRTY') return 'dirty'
   if (v === 'RECYCLING' || v === 'RELEASE_REQUESTED' || v === 'TIMEOUT') return 'recycling'
   if (v === 'ERROR' || v === 'FAILED' || v === 'RESET_ERROR') return 'error'
   return 'released'

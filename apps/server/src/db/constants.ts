@@ -3,10 +3,19 @@
  * （t3 的 DB 层保持自包含，不依赖 shared 运行时代码；t4/t5/t6 在领域层做枚举↔字符串映射。）
  */
 
-/** 科应账号状态（AccountStatus，PRD §23） */
+/**
+ * 科应账号状态（AccountStatus，PRD §23）
+ *
+ * DIRTY（回收隔离态）与 RECYCLING（改密中）的边界必须分清，否则会写出两套并行状态：
+ *  - DIRTY    = 服务端**没有**改密任务，账号隔离，等客户端确认清理（或等超时转改密）。
+ *               不创建 reset_jobs；由扩展 ack 或 RecycleScheduler 推进。
+ *  - RECYCLING = 服务端正在/已排队改密（存在 reset_jobs）。
+ * 两者都不允许被 claim，选号 SQL 只看 AVAILABLE，因此天然排除。
+ */
 export const ACCOUNT_STATUS = {
   AVAILABLE: 'AVAILABLE',
   IN_USE: 'IN_USE',
+  DIRTY: 'DIRTY',
   RECYCLING: 'RECYCLING',
   ERROR: 'ERROR',
 } as const;
@@ -43,6 +52,16 @@ export const DEFAULT_SYSTEM_SETTINGS: Record<string, string> = {
   activity_throttle_seconds: '5',
   extension_min_version: '1.0.0',
   extension_latest_version: '1.4.0',
+  /** 回收时等客户端「清理完成」确认的时长；超时即转改密兜底。 */
+  purge_ack_timeout_seconds: '120',
+  /** 密码最长有效期（天）；0 表示关闭定时轮换。 */
+  password_max_age_days: '30',
+  /** 同一账号两次改密的最小间隔（小时），防 DIRTY 抖动把风控惹毛。 */
+  password_rotation_min_interval_hours: '24',
+  /** 回收模式：PURGE=清本机会话（默认）；ROTATE=退回旧「归还即改密」，用于紧急止血。 */
+  recycle_mode: 'PURGE',
+  /** 支持清理确认的最低扩展版本；低于此版本的客户端归还时自动走 ROTATE。 */
+  purge_gate_min_version: '1.5.0',
 };
 
 /** 审计动作（与 @scienceing/shared AuditAction 一致；用户管理动作扩展） */
@@ -78,6 +97,22 @@ export const AUDIT_ACTION = {
   /** 管理员执行敏感操作前自证当前密码（USER_PASSWORD_RESET 的前置验证） */
   ADMIN_PASSWORD_VERIFY: 'ADMIN_PASSWORD_VERIFY',
   ADMIN_PASSWORD_REVEAL: 'ADMIN_PASSWORD_REVEAL',
+  /** 客户端确认已清理本机会话（回收零改密路径的收尾动作） */
+  SESSION_PURGED: 'SESSION_PURGED',
+  /** 客户端上报清理失败 */
+  PURGE_FAILED: 'PURGE_FAILED',
+  /** DIRTY 超过 ack 时限仍未确认，转入改密兜底 */
+  PURGE_TIMEOUT: 'PURGE_TIMEOUT',
+  /** 自动（非人工）把账号排入改密队列：超时转改密 / 30 天超期 / 到期补改密 */
+  AUTO_ROTATION_ENQUEUED: 'AUTO_ROTATION_ENQUEUED',
+  /** 因 24h 频次护栏暂缓改密，推迟到 rotation_not_before */
+  ROTATION_DEFERRED: 'ROTATION_DEFERRED',
+  /** 管理员对 DIRTY 账号手动发起改密 */
+  ACCOUNT_ROTATE: 'ACCOUNT_ROTATE',
+  /** 向扩展下发账号凭据（阶段 B 代填用；用于追溯“密码被下发过几次”） */
+  CREDENTIAL_ISSUED: 'CREDENTIAL_ISSUED',
+  AUTOFILL_SUCCEEDED: 'AUTOFILL_SUCCEEDED',
+  AUTOFILL_FAILED: 'AUTOFILL_FAILED',
 } as const;
 
 /** 审计结果 */
@@ -129,4 +164,13 @@ export const AUDIT_ACTION_LABEL: Record<keyof typeof AUDIT_ACTION, string> = {
   PASSWORD_DECRYPT_FAILED: '密码解密失败',
   ADMIN_PASSWORD_VERIFY: '验证管理员密码',
   ADMIN_PASSWORD_REVEAL: '查看科应账号密码',
+  SESSION_PURGED: '清空本机会话',
+  PURGE_FAILED: '清空会话失败',
+  PURGE_TIMEOUT: '清理确认超时',
+  AUTO_ROTATION_ENQUEUED: '自动排入改密',
+  ROTATION_DEFERRED: '改密延后（频次限制）',
+  ACCOUNT_ROTATE: '手动发起改密',
+  CREDENTIAL_ISSUED: '下发账号凭据',
+  AUTOFILL_SUCCEEDED: '自动登录成功',
+  AUTOFILL_FAILED: '自动登录失败',
 };

@@ -11,18 +11,26 @@
 /**
  * 科应账号状态机（PRD §23）。
  *
- * 只使用四个核心状态：
+ * 五个状态：新增 DIRTY（回收隔离态）。
  *
  *   AVAILABLE ──领取──▶ IN_USE ──Activity──▶ IN_USE
- *   IN_USE ──24小时无操作/主动归还/管理员强制──▶ RECYCLING
+ *   IN_USE ──主动归还/管理员强制/禁用──▶ DIRTY ──客户端确认清理──▶ AVAILABLE
+ *   DIRTY ──确认失败/确认超时/管理员改密──▶ RECYCLING
+ *   IN_USE ──24小时无操作超时──▶ RECYCLING
  *   RECYCLING ──密码重置成功──▶ AVAILABLE
- *   RECYCLING ──重置失败──▶ ERROR
+ *   RECYCLING ──重置失败（不再自动重试）──▶ ERROR
  *   ERROR ──管理员重试──▶ RECYCLING
  *   ERROR ──管理员确认人工处理完成──▶ AVAILABLE
+ *
+ * DIRTY 与 RECYCLING 的区别（不要混用）：
+ * - DIRTY：服务端没有改密任务，等客户端清理确认；不创建 reset_jobs。
+ * - RECYCLING：服务端正在或已排队改密；存在 reset_jobs。
  */
 export enum AccountStatus {
   AVAILABLE = 'AVAILABLE',
   IN_USE = 'IN_USE',
+  /** 回收隔离态：禁止发放，等待客户端确认已清空本机会话 */
+  DIRTY = 'DIRTY',
   RECYCLING = 'RECYCLING',
   ERROR = 'ERROR',
 }

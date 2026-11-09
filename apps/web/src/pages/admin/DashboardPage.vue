@@ -37,7 +37,8 @@ const AXIS_LABEL = { color: '#737373', fontSize: 12, fontFamily: FONT_FAMILY }
 const AXIS_LINE = { lineStyle: { color: '#e5e5e5' } }
 const SPLIT_LINE = { lineStyle: { color: '#f0f0f0' } }
 
-const STATUS_COLOR = { AVAILABLE: '#16a34a', IN_USE: '#2563eb', RECYCLING: '#d97706', ERROR: '#e7000b' }
+// DIRTY 与 RECYCLING 同为琥珀（语义相邻：都在回收过程中），靠标签区分。
+const STATUS_COLOR = { AVAILABLE: '#16a34a', IN_USE: '#2563eb', DIRTY: '#b45309', RECYCLING: '#d97706', ERROR: '#e7000b' }
 const NEUTRAL_RAMP = ['#0a0a0a', '#525252', '#a3a3a3', '#d4d4d4']
 
 onMounted(load)
@@ -70,7 +71,9 @@ const overviewCells = computed(() => {
     { label: '账号总数', value: o.accountTotal, hint: `含停用 ${o.accountDisabled}` },
     { label: '可用', value: o.available, dot: '#16a34a' },
     { label: '使用中', value: o.inUse, dot: '#2563eb' },
-    { label: '回收中', value: o.recycling, dot: '#d97706' },
+    // KPI 网格是 4 列固定布局，直接加第 9 格会留出空格露出分隔底色；
+    // 因此「清理中」以回收中卡片的提示形式呈现，数字仍然一眼可见。
+    { label: '回收中', value: o.recycling, dot: '#d97706', hint: o.dirty ? `另清理中 ${o.dirty}` : undefined },
     { label: '异常', value: o.error, dot: '#e7000b' },
     { label: '当前租约', value: o.activeLeases, hint: `${o.activeUsers} 人占用中` },
     { label: `区间领用（${stats.value?.range?.days ?? days.value} 天）`, value: o.totalClaims, hint: '次' },

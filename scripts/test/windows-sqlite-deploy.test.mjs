@@ -62,11 +62,14 @@ function makeRelease(source, tag, failure = '') {
 fs.appendFileSync(process.env.SCIENCEING_TEST_EVENTS,'${tag}:'+process.argv[2]+'\\n');
 const r=require('node:child_process').spawnSync(process.execPath,[__dirname+'/maintenance.impl.js',...process.argv.slice(2)],{stdio:'inherit',windowsHide:true});
 process.exit(r.status ?? 1);`);
-  let schemaVersion = 7;
+  // 版本号一律从程序真实迁移列表推导，避免每加一个迁移就要回来改数字（S0 加 008 时踩过）。
+  const currentSchemaVersion = MIGRATIONS.at(-1).version;
+  let schemaVersion = currentSchemaVersion;
   if (failure === 'migration') {
     const migrations = join(bundle, 'apps/server/dist/db/migrations.js');
-    writeFileSync(migrations, readFileSync(migrations, 'utf8') + `\nexports.MIGRATIONS.push({version:8,name:'broken',sql:'CREATE TABLE partial(id INTEGER); INSERT INTO missing_table VALUES(1)'}); exports.CURRENT_SCHEMA_VERSION=8;`);
-    schemaVersion = 8;
+    const brokenVersion = currentSchemaVersion + 1;
+    writeFileSync(migrations, readFileSync(migrations, 'utf8') + `\nexports.MIGRATIONS.push({version:${brokenVersion},name:'broken',sql:'CREATE TABLE partial(id INTEGER); INSERT INTO missing_table VALUES(1)'}); exports.CURRENT_SCHEMA_VERSION=${brokenVersion};`);
+    schemaVersion = brokenVersion;
   }
   writeFileSync(join(bundle, 'release.json'), JSON.stringify({ version: tag, commit: 'a'.repeat(40), schemaVersion }));
   const zip = join(source, 'scienceing-' + tag + '.zip');
@@ -123,7 +126,7 @@ test('Windows 本地 ZIP 部署、重复部署、迁移失败、启动失败及�
   try {
     let result = deploy(f, 'latest', ['-LegacyDatabasePath', f.database]);
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.equal(productionVersion(f), 7);
+    assert.equal(productionVersion(f), MIGRATIONS.at(-1).version);
     const sourceDb = new DatabaseSync(f.database, { readOnly: true });
     try { assert.equal(sourceDb.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v, 4); } finally { sourceDb.close(); }
     assert.deepEqual(readFileSync(f.events, 'utf8').trim().split('\n'), [
@@ -145,7 +148,7 @@ test('Windows 本地 ZIP 部署、重复部署、迁移失败、启动失败及�
     assert.deepEqual(readFileSync(f.events, 'utf8').trim().split('\n'), ['v1.0.0:stop']);
     assert.equal(readdirSync(join(f.install, 'backups')).length, backupCount);
     assert.equal(readFileSync(join(f.install, 'current.json'), 'utf8'), pointer);
-    assert.equal(productionVersion(f), 7);
+    assert.equal(productionVersion(f), MIGRATIONS.at(-1).version);
     writeFileSync(previousCli, serviceCli('v1.0.0'));
 
     for (const [tag, failure] of [['v1.0.1', 'migration'], ['v1.0.2', 'start'], ['v1.0.3', 'stop']]) {
@@ -155,7 +158,7 @@ test('Windows 本地 ZIP 部署、重复部署、迁移失败、启动失败及�
       result = deploy(f, tag);
       assert.notEqual(result.status, 0, result.stdout + result.stderr);
       assert.equal(readFileSync(join(f.install, 'current.json'), 'utf8'), pointer);
-      assert.equal(productionVersion(f), 7);
+      assert.equal(productionVersion(f), MIGRATIONS.at(-1).version);
       const events = readFileSync(f.events, 'utf8').trim().split('\n');
       if (failure === 'migration') assert.ok(!events.includes(tag + ':start'));
       if (failure === 'stop') {

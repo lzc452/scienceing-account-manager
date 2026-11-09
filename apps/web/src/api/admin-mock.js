@@ -526,8 +526,8 @@ async function getDashboardStats(days = 30) {
   const accounts = state.accounts
   const countBy = (status) => accounts.filter((a) => a.status === status && a.enabled).length
 
-  const statusLabels = { AVAILABLE: '可用', IN_USE: '使用中', RECYCLING: '回收中', ERROR: '异常' }
-  const accountStatus = ['AVAILABLE', 'IN_USE', 'RECYCLING', 'ERROR'].map((name) => ({
+  const statusLabels = { AVAILABLE: '可用', IN_USE: '使用中', DIRTY: '清理中', RECYCLING: '回收中', ERROR: '异常' }
+  const accountStatus = ['AVAILABLE', 'IN_USE', 'DIRTY', 'RECYCLING', 'ERROR'].map((name) => ({
     name,
     label: statusLabels[name],
     value: countBy(name),
@@ -603,6 +603,7 @@ async function getDashboardStats(days = 30) {
       accountDisabled: accounts.filter((a) => !a.enabled).length,
       available: countBy('AVAILABLE'),
       inUse: countBy('IN_USE'),
+      dirty: countBy('DIRTY'),
       recycling: countBy('RECYCLING'),
       error: countBy('ERROR'),
       activeLeases: state.leases.filter((l) => l.status === 'ACTIVE').length,

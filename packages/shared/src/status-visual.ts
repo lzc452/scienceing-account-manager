@@ -50,6 +50,18 @@ export const STATUS_VISUALS: Record<string, StatusVisual> = {
     hollow: false,
     spinning: false,
   },
+  // DIRTY 与 RECYCLING 同为琥珀，但**不旋转**、标签不同：
+  // 前者是"等本机确认清理"（通常几秒），后者是"服务端正在改密"（可能数十秒）。
+  // 用文案区分而不是再造一种颜色，避免状态色语义膨胀。
+  DIRTY: {
+    key: 'DIRTY',
+    label: '清理中',
+    dot: '#d97706',
+    badgeBg: '#fffbeb',
+    badgeText: '#b45309',
+    hollow: true,
+    spinning: false,
+  },
   RECYCLING: {
     key: 'RECYCLING',
     label: '回收中',
@@ -83,6 +95,7 @@ export const STATUS_VISUALS: Record<string, StatusVisual> = {
 export const ACCOUNT_STATUS_VISUAL: Record<AccountStatus, StatusVisual> = {
   [AccountStatus.AVAILABLE]: STATUS_VISUALS.AVAILABLE!,
   [AccountStatus.IN_USE]: STATUS_VISUALS.IN_USE!,
+  [AccountStatus.DIRTY]: STATUS_VISUALS.DIRTY!,
   [AccountStatus.RECYCLING]: STATUS_VISUALS.RECYCLING!,
   [AccountStatus.ERROR]: STATUS_VISUALS.ERROR!,
 };
