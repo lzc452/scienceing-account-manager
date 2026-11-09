@@ -15,6 +15,7 @@ import { AutomationModule } from './modules/automation/automation.module';
 import { ResetModule } from './modules/reset/reset.module';
 import { HealthModule } from './health/health.module';
 import { TimeoutScheduler } from './scheduler/timeout.service';
+import { DirtySweeper } from './scheduler/dirty-sweeper.service';
 
 @Module({
   imports: [
@@ -34,6 +35,6 @@ import { TimeoutScheduler } from './scheduler/timeout.service';
     ResetModule,
     HealthModule,
   ],
-  providers: [TimeoutScheduler],
+  providers: [TimeoutScheduler, DirtySweeper],
 })
 export class AppModule {}

@@ -19,6 +19,7 @@ import { isPasswordProvisioned } from '../../crypto/account-password-state';
 import { nowIso } from '../../db/config';
 import { SEED_PLACEHOLDER_PASSWORD } from '../../db/seed';
 import type { AccountRow } from '../leases/leases.types';
+import { DEFAULT_PURGE_GATE_VERSION, resolveRecycleMode } from '../leases/recycle-policy';
 import type { AuthUser } from '../auth/auth.types';
 
 export interface AdminAccountView {
@@ -236,17 +237,93 @@ export class AdminService {
     };
   }
 
-  /** 强制回收（幂等）：有 ACTIVE lease 才回收；否则返回当前状态（PRD §52）。 */
-  forceRelease(accountId: number, adminUser: AuthUser): { accountId: number; status: string; recycled: boolean } {
+  /**
+   * 强制回收（幂等）：有 ACTIVE lease 才回收；否则返回当前状态（PRD §52）。
+   *
+   * 与用户主动归还走同一套分流：客户端有能力清理时先落 DIRTY（零改密），
+   * 否则退回「直接改密」。管理员点强制回收时那台机器通常还开着，
+   * 清理成功的话既省一次改密，也避免留下一个仍可用的旧令牌。
+   */
+  forceRelease(
+    accountId: number,
+    adminUser: AuthUser,
+  ): { accountId: number; status: string; recycled: boolean; recycleMode?: 'PURGE' | 'ROTATE' } {
     const account = this.getAccount(accountId);
     const lease = this.dbService.db
-      .prepare('SELECT id FROM leases WHERE account_id = ? AND status = ?')
-      .get(accountId, LEASE_STATUS.ACTIVE) as unknown as { id: number } | undefined;
+      .prepare('SELECT id, extension_version FROM leases WHERE account_id = ? AND status = ?')
+      .get(accountId, LEASE_STATUS.ACTIVE) as unknown as { id: number; extension_version: string | null } | undefined;
     if (!lease) {
       return { accountId, status: account.status, recycled: false };
     }
+
+    const decision = resolveRecycleMode({
+      configuredMode: this.readSetting('recycle_mode', 'PURGE'),
+      extensionVersion: lease.extension_version,
+      gateVersion: this.readSetting('purge_gate_min_version', DEFAULT_PURGE_GATE_VERSION),
+    });
+
+    if (decision.mode === 'PURGE') {
+      this.beginPurge(account, lease.id, adminUser);
+      return { accountId, status: ACCOUNT_STATUS.DIRTY, recycled: true, recycleMode: 'PURGE' };
+    }
+
     this.enqueueReset(account, adminUser, AUDIT_ACTION.ADMIN_FORCE_RELEASE);
-    return { accountId, status: ACCOUNT_STATUS.RECYCLING, recycled: true };
+    return { accountId, status: ACCOUNT_STATUS.RECYCLING, recycled: true, recycleMode: 'ROTATE' };
+  }
+
+  /**
+   * 管理员强制回收的 PURGE 分支：lease → RECYCLING、账号 → DIRTY，不建 reset_job。
+   * 后续由扩展回执收尾，或由 DIRTY 超时扫描转改密。
+   */
+  private beginPurge(account: AccountRow, leaseId: number, adminUser: AuthUser): void {
+    const db = this.dbService.db;
+    const now = nowIso();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const leaseUpdate = db
+        .prepare(
+          `UPDATE leases SET status = ?, release_reason = ?, release_requested_at = ?, updated_at = ?
+            WHERE id = ? AND status = ?`,
+        )
+        .run(LEASE_STATUS.RECYCLING, RELEASE_REASON.ADMIN_FORCE, now, now, leaseId, LEASE_STATUS.ACTIVE);
+      if (Number(leaseUpdate.changes) !== 1) {
+        db.exec('ROLLBACK');
+        throw new ConflictException('租约状态已变化，请刷新后重试');
+      }
+
+      const accountUpdate = db
+        .prepare('UPDATE scienceing_accounts SET status = ?, dirty_since = ?, purge_attempts = 0, updated_at = ? WHERE id = ? AND status = ?')
+        .run(ACCOUNT_STATUS.DIRTY, now, now, account.id, ACCOUNT_STATUS.IN_USE);
+      if (Number(accountUpdate.changes) !== 1) {
+        db.exec('ROLLBACK');
+        throw new ConflictException('账号状态已变化，请刷新后重试');
+      }
+
+      db.exec('COMMIT');
+    } catch (err) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // 已回滚
+      }
+      throw err;
+    }
+
+    this.audit.record({
+      action: AUDIT_ACTION.ADMIN_FORCE_RELEASE,
+      result: AUDIT_RESULT.SUCCESS,
+      userId: adminUser.id,
+      accountId: account.id,
+      leaseId,
+      metadata: { accountCode: account.code, recycleMode: 'PURGE' },
+    });
+  }
+
+  private readSetting(key: string, fallback: string): string {
+    const row = this.dbService.db
+      .prepare('SELECT value FROM system_settings WHERE key = ?')
+      .get(key) as { value: string } | undefined;
+    return row?.value ?? fallback;
   }
 
   /** 手动重置密码（两阶段 Phase 1）：生成 pending 密码 → RECYCLING + reset_job（PRD §30）。 */

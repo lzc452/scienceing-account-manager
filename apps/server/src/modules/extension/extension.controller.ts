@@ -80,6 +80,12 @@ export class ExtensionController {
       warningSeconds: this.numericSetting(settings, 'warning_hours', 2) * 60 * 60,
       criticalWarningSeconds: this.numericSetting(settings, 'critical_warning_hours', 1) * 60 * 60,
       inactivityTimeoutSeconds: this.numericSetting(settings, 'inactivity_timeout_hours', 24) * 60 * 60,
+      // 回收协议：扩展据此决定「归还时是否需要清理本机会话并回执」。
+      // recycleMode=ROTATE 时扩展什么都不用做（服务端会改密），这是紧急止血开关。
+      // purgeGateVersion 同时下发，方便扩展自行判断（低于该版本即使服务端说 PURGE 也不该尝试）。
+      recycleMode: settings['recycle_mode'] === 'ROTATE' ? 'ROTATE' : 'PURGE',
+      purgeAckTimeoutSeconds: this.numericSetting(settings, 'purge_ack_timeout_seconds', 120),
+      purgeGateVersion: settings['purge_gate_min_version'] ?? '1.5.0',
       // 下载包信息：前端「下载助手 / 下载最新版 ZIP」据此给出真实入口
       package: extensionPackage,
     };
