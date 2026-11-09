@@ -112,11 +112,52 @@ function warnIfInsecureTarget(config: WorkerConfig): void {
 }
 
 /**
- * 管理员登录（真实科应）：
- *  打开登录页 → 填用户名/密码 → 勾选协议 → 提交 → 等离开登录页 → 显式进入账号管理页。
- * 返回时 page 已停在账号管理页且筛选组件可见（context 由调用方负责关闭）。
+ * 提取登录页上的失败提示（用于区分密码错误 / 锁定 / 风控 / 验证码）。
+ * 只取提示文案，绝不涉及输入框内容，可安全写入日志与报告。
  */
-export async function loginAdmin(page: Page, config: WorkerConfig): Promise<void> {
+async function describeLoginFailure(page: Page): Promise<string> {
+  const text = await page
+    .evaluate(() => {
+      const selectors = [
+        '.ant-form-item-explain-error',
+        '.ant-message-notice-content',
+        '.ant-alert-message',
+        '.ant-notification-notice-message',
+        '[class*="errorText"]',
+        '[class*="error-text"]',
+      ];
+      const found: string[] = [];
+      for (const selector of selectors) {
+        for (const el of Array.from(document.querySelectorAll(selector)).slice(0, 3)) {
+          const value = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+          if (value && value.length <= 120 && !found.includes(value)) found.push(value);
+        }
+      }
+      if (found.length === 0) {
+        const body = (document.body?.innerText ?? '').replace(/\s+/g, ' ').trim();
+        const hit = body.match(/(密码|账号|用户名)[^。；;]{0,40}(错误|不正确|不存在|锁定|禁用|频繁|验证|过期)/);
+        if (hit) found.push(hit[0]);
+      }
+      return found.join(' | ');
+    })
+    .catch(() => '');
+  return text;
+}
+
+/**
+ * 用给定凭据登录（真实科应）：
+ *  打开登录页 → 填用户名/密码 → 勾选协议 → 提交 → 处理单点冲突 → 等离开登录页。
+ *
+ * 从 loginAdmin 抽出：验证脚本（v2-password）需要以**非管理员**账号登录，
+ * 但又必须复用同一套协议勾选与单点冲突处理，否则两处实现会漂移。
+ * 只负责「登录成功」，不负责导航到任何业务页。
+ */
+export async function loginWithCredentials(
+  page: Page,
+  config: WorkerConfig,
+  username: string,
+  password: string,
+): Promise<{ singleSessionPrompt: boolean }> {
   warnIfInsecureTarget(config);
   step('login: 打开登录页 ' + config.loginUrl);
   await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded' });
@@ -124,8 +165,8 @@ export async function loginAdmin(page: Page, config: WorkerConfig): Promise<void
   await s.loginForm.waitFor({ state: 'visible', timeout: config.defaultTimeoutMs });
   step('login: 登录表单已就绪，填写用户名/密码');
 
-  await s.loginUsernameInput.fill(config.adminUsername);
-  await s.loginPasswordInput.fill(config.adminPassword);
+  await s.loginUsernameInput.fill(username);
+  await s.loginPasswordInput.fill(password);
 
   // 协议勾选：真实科应登录前必须同意（checkbox 视觉可用，正常 check；失败时 force 兜底）。
   if ((await s.loginAgreeCheckbox.count()) > 0 && !(await s.loginAgreeCheckbox.isChecked().catch(() => false))) {
@@ -140,8 +181,8 @@ export async function loginAdmin(page: Page, config: WorkerConfig): Promise<void
   // 真实科应单点登录强制确认（如果该账号已在别处登录，会弹「由于您的账号已经在其他地方登录...」确认框，
   // 必须点「确 定」强制下线其他设备才能继续）。弹窗在提交后不一定立即出现（需等后端响应），
   // 因此轮询页面正文检测标记文本（最多 10s）。最多处理两轮（防御性，应对嵌套确认）。
-  await handleSingleSessionConfirm(page, config);
-  step('login: 已提交，当前 URL=' + page.url());
+  const singleSessionPrompt = await handleSingleSessionConfirm(page, config);
+  step(`login: 已提交，当前 URL=${page.url()}（单点冲突提示=${singleSessionPrompt ? '有' : '无'}）`);
 
   // 真实科应登录成功后跳 /search（可能为 SPA 路由变化，URL 也可能保留在 /user/login）。
   // 等待离开 /user/login 或登录表单不可见（超时不阻塞，后续导航兜底）。
@@ -151,10 +192,28 @@ export async function loginAdmin(page: Page, config: WorkerConfig): Promise<void
   step('login: 等待跳转结束，URL=' + page.url());
 
   if (await s.loginForm.isVisible().catch(() => false)) {
-    throw new Error('科应登录失败：提交后仍停留在登录页（请检查 SCIENCING_ADMIN_USERNAME/PASSWORD 与协议勾选）');
+    // 只报「还在登录页」等于没报：密码错误、账号锁定、需要验证码、风控拦截都无法区分，
+    // 排查时只能猜。这里把页面自身的提示文案抓出来（提示里不含密码，可安全落日志）。
+    const detail = await describeLoginFailure(page);
+    throw new Error(
+      `科应登录失败：提交后仍停留在登录页${detail ? `（页面提示：${detail}）` : ''}`
+        + '。请检查用户名/密码是否正确、账号是否被锁定或需要验证（与协议勾选无关时常见于此）。',
+    );
   }
 
+  return { singleSessionPrompt };
+}
+
+/**
+ * 管理员登录（真实科应）：
+ *  复用 loginWithCredentials 完成认证，再显式进入账号管理页。
+ * 返回时 page 已停在账号管理页且筛选组件可见（context 由调用方负责关闭）。
+ */
+export async function loginAdmin(page: Page, config: WorkerConfig): Promise<void> {
+  await loginWithCredentials(page, config, config.adminUsername, config.adminPassword);
+
   // 显式二次导航进账号管理页并等待就绪。
+  const s = buildSelectors(page);
   step('login: 进入账号管理页 ' + config.adminUrl);
   await page.goto(config.adminUrl);
   await s.accountPageReady.waitFor({ state: 'visible', timeout: config.defaultTimeoutMs });
@@ -167,17 +226,22 @@ export async function loginAdmin(page: Page, config: WorkerConfig): Promise<void
  * - 提交后弹窗不一定立即出现，因此轮询正文文本（最多 10s）等待标记出现；
  * - 找到任意可见的「确 定」按钮并点击强制下线其他设备；
  * - 最多处理两轮（防御性，应对嵌套确认）。
+ *
+ * 返回值：本次登录**是否出现过**「账号已在其他地方登录」提示。
+ * 这个信号是判断「服务端是否认为该账号已有活动会话」的唯一直接证据，
+ * 也是「退出登录有没有清掉服务端会话记录」的判据（V4 验证用），因此必须上报，不能吞掉。
  */
-async function handleSingleSessionConfirm(page: Page, config: WorkerConfig): Promise<void> {
+async function handleSingleSessionConfirm(page: Page, config: WorkerConfig): Promise<boolean> {
+  let prompted = false;
   for (let i = 0; i < 2; i++) {
     // 1) 等 URL 离开 /user/login（说明后端已认证成功，无须再处理确认框）
-    if (!/\/user\/login/i.test(page.url())) return;
+    if (!/\/user\/login/i.test(page.url())) return prompted;
 
     // 2) 轮询页面正文，等待单点确认标记出现（提交后可能 1~3s 才渲染）
     let hasMarker = false;
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
-      if (!/\/user\/login/i.test(page.url())) return;
+      if (!/\/user\/login/i.test(page.url())) return prompted;
       let txt = '';
       try {
         txt = (await page.evaluate(() => (document.body && document.body.innerText) || '')) || '';
@@ -190,19 +254,21 @@ async function handleSingleSessionConfirm(page: Page, config: WorkerConfig): Pro
       }
       await page.waitForTimeout(500);
     }
-    if (!hasMarker) return;
+    if (!hasMarker) return prompted;
 
     // 3) 在登录上下文内点击任意可见的「确 定」按钮（覆盖 antd 普通 modal 与 Modal.confirm）。
     const okBtn = page.getByRole('button', { name: /确\s*定/ }).first();
     try {
       await okBtn.waitFor({ state: 'visible', timeout: 3000 });
       await okBtn.click({ timeout: config.defaultTimeoutMs });
+      prompted = true;
       // 给后端一点时间推进
       await page.waitForTimeout(800);
     } catch {
-      return;
+      return prompted;
     }
   }
+  return prompted;
 }
 
 /**

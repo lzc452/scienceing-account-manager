@@ -8,6 +8,10 @@
     "login": "node dist/cli.js login",
     "reset": "node dist/cli.js reset",
     "run-queue": "node dist/cli.js run",
+    "v1": "node dist/v1-session.js",
+    "v2": "node dist/v2-password.js",
+    "v3": "node dist/v3-logout.js",
+    "v4": "node dist/v4-kick.js",
     "test": "node --test --test-isolation=none dist/tests/*.test.js"
   },
   "dependencies": {
