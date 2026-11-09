@@ -7,6 +7,7 @@ import { URL } from 'node:url';
 import * as config from '../src/lib/config.js';
 import { compareVersions } from '../src/lib/version.js';
 import { claimLeaseThroughExtension } from '../src/lib/claim.js';
+import * as purge from '../src/lib/purge.js';
 
 const background = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8')
   .replace(/^import[\s\S]*?from '[^']+';\r?\n/gm, '');
@@ -50,7 +51,9 @@ function worker({ stored = initialState(), restore, overrideFetch } = {}) {
     },
   };
   const context = vm.createContext({
-    ...config, compareVersions, claimLeaseThroughExtension, chrome, fetch, URL, AbortController,
+    // 注意：background.js 在 vm 里跑时 import 被剥离，所有依赖必须显式注入，
+    // 少一个就会在运行到该分支时抛 TypeError（且只在特定用例里暴露）。
+    ...config, ...purge, compareVersions, claimLeaseThroughExtension, chrome, fetch, URL, AbortController,
     console: { log() {}, warn() {} },
     setTimeout: (fn, delay) => { timers.set(++timerId, { fn, delay }); return timerId; },
     clearTimeout: (id) => timers.delete(id),

@@ -1,4 +1,4 @@
-/* global chrome, window */
+/* global chrome, window, localStorage, sessionStorage */
 
 /**
  * 科应域 Content Script（document_idle）。
@@ -53,10 +53,62 @@
   }
 
   // -------------------------------------------------------------------------
+  // 本机会话清理（t11）：worker 下发 PURGE_SESSION，在此清空存储并回读复核
+  //
+  // 为什么要在页面上下文做：localStorage 按 origin 存储，内容脚本（隔离世界）
+  // 与页面共享同一份 Storage，因此这里 clear() 与页面自己 clear() 等价；
+  // 而「回读确认没有残留令牌键」只有能访问 Storage 的上下文才做得到。
+  // -------------------------------------------------------------------------
+
+  /** 形似令牌的键名（只用于复核残留，不读取、不输出任何值）。 */
+  const TOKEN_KEY_PATTERN = /authorization|token|jwt|session/i;
+
+  function purgeLocalSession() {
+    const detail = [];
+    let ok = true;
+
+    try {
+      const before = localStorage.length;
+      localStorage.clear();
+      detail.push(`localStorage cleared(${before})`);
+    } catch (error) {
+      ok = false;
+      detail.push(`localStorage error: ${error && error.message ? error.message : String(error)}`);
+    }
+
+    try {
+      // 令牌也有被复制到 sessionStorage 的可能，一并清掉
+      sessionStorage.clear();
+    } catch {
+      // 极少数环境禁用 sessionStorage，忽略
+    }
+
+    // 回读复核：清完再扫一遍键名，确认没有残留的令牌键
+    const residual = [];
+    try {
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i) ?? '';
+        if (TOKEN_KEY_PATTERN.test(key)) residual.push(key);
+      }
+    } catch {
+      // 读不了就按失败算：拿不到证据不能声称清干净了
+      ok = false;
+      detail.push('readback failed');
+    }
+    if (residual.length > 0) {
+      ok = false;
+      detail.push(`residual=${residual.join(',')}`);
+    }
+
+    detail.push(`remain=${localStorage.length}`);
+    return { ok, method: 'PAGE', detail: detail.join(' | ') };
+  }
+
+  // -------------------------------------------------------------------------
   // 状态推送接收 → 驱动悬浮窗渲染
   // -------------------------------------------------------------------------
 
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message) return;
     if (message.type === 'LEASE_BOUND') {
       receivedLeaseState = true;
@@ -83,6 +135,11 @@
       globalThis.__scienceingPanel?.render({ status: null, config, serviceError: false });
     } else if (message.type === 'LEASE_SERVICE_ERROR') {
       globalThis.__scienceingPanel?.render({ status: null, config, serviceError: true });
+    } else if (message.type === 'PURGE_SESSION') {
+      // 同步返回：清理是本地存储操作，没有异步 IO，没必要占住消息通道
+      bound = false;
+      if (sendResponse) sendResponse(purgeLocalSession());
+      return false;
     }
   });
 

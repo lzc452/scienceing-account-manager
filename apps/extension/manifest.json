@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "科应共享账号助手",
-  "version": "1.4.0",
-  "description": "科应共享账号管理平台浏览器扩展：看板握手 / 版本检测 / Lease 绑定 / 多 Tab 继承 / Activity 监听 / Shadow DOM 悬浮窗（最小权限）。",
+  "version": "1.5.0",
+  "description": "科应共享账号管理平台浏览器扩展：看板握手 / 版本检测 / Lease 绑定 / 多 Tab 继承 / Activity 监听 / 归还时清理本机会话 / Shadow DOM 悬浮窗（最小权限）。",
   "minimum_chrome_version": "102",
-  "permissions": ["tabs", "storage"],
+  "permissions": ["tabs", "storage", "browsingData", "alarms"],
   "host_permissions": [
     "http://localhost:3000/*",
     "http://127.0.0.1:3000/*",
